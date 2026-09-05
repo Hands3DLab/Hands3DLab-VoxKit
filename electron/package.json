@@ -11,14 +11,34 @@
     },
     "win": {
       "icon": "assets/AppIcon.ico"
-    }
+    },
+    "asar": true,
+    "files": [
+      "**/*",
+      "!config.toml",
+      "!scripts/**"
+    ],
+    "extraResources": [
+      {
+        "from": ".protected/config.enc.json",
+        "to": "voxkit-config.enc.json"
+      }
+    ]
   },
   "scripts": {
     "start": "electron .",
-    "build": "cmake -S .. -B ../build -DCMAKE_BUILD_TYPE=Release && cmake --build ../build --parallel 2"
+    "dev": "electron .",
+    "protect:mac": "node scripts/protect-resources.cjs darwin",
+    "protect:win": "node scripts/protect-resources.cjs win32",
+    "protect:linux": "node scripts/protect-resources.cjs linux",
+    "build": "cmake -S .. -B ../build -DCMAKE_BUILD_TYPE=Release && cmake --build ../build --parallel 2",
+    "package:mac": "npm run protect:mac && electron-builder --mac",
+    "package:win": "npm run protect:win && electron-builder --win",
+    "package:linux": "npm run protect:linux && electron-builder --linux"
   },
   "devDependencies": {
-    "electron": "^32.3.3"
+    "electron": "^32.3.3",
+    "electron-builder": "^26.0.12"
   },
   "dependencies": {
     "@phosphor-icons/web": "^2.1.2"

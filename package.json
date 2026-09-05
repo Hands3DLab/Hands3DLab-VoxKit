@@ -4,6 +4,10 @@
   "description": "Workspace convenience scripts for the Hands3DLab-VoxKit Electron client.",
   "scripts": {
     "start": "npm --prefix electron start",
+    "dev": "npm --prefix electron run dev",
+    "package:mac": "npm --prefix electron run package:mac",
+    "package:win": "npm --prefix electron run package:win",
+    "package:linux": "npm --prefix electron run package:linux",
     "build": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --parallel 2"
   }
 }

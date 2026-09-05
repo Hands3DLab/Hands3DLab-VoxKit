@@ -77,10 +77,10 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 
 /* ── Workspace ── */
 .workspace { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-.topbar { min-height: 50px; display: flex; align-items: center; gap: 10px; padding: 0 18px 0 22px; background: rgba(250,250,252,.9); border-bottom: 1px solid var(--line); backdrop-filter: saturate(180%) blur(24px); -webkit-app-region: drag; }
+.topbar { min-height: 50px; display: flex; align-items: center; gap: 10px; padding: 0 clamp(12px, 2vw, 22px); background: rgba(250,250,252,.9); border-bottom: 1px solid var(--line); backdrop-filter: saturate(180%) blur(24px); -webkit-app-region: drag; }
 .floating-toggle { display: none; }
 /* clear native traffic-lights when sidebar is fully hidden */
-.sidebar-collapsed .topbar { padding-left: 84px; }
+.sidebar-collapsed .topbar { padding-left: clamp(56px, 6vw, 84px); }
 .topbar-title { flex: 1; font-size: 14px; font-weight: 600; color: var(--ink); letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar-arrow { color: var(--muted); }
 
@@ -133,6 +133,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 .segmented { display: flex; flex: 1; gap: 2px; padding: 3px; border-radius: 9px; background: rgba(118,118,128,.12); }
 .segmented button { min-height: 34px; flex: 1; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease; }
 .segmented button:hover { color: var(--ink); }
+.segmented button:disabled { color: var(--muted); cursor: not-allowed; opacity: .48; }
+.segmented button:disabled:hover { color: var(--muted); }
 .segmented button.selected { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.17); }
 
 /* ── Progress ── */
@@ -307,7 +309,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
   :root { --sidebar: 160px; }
   .workflow { padding-inline: 20px; }
   .actionbar { padding-inline: 20px; }
-  .parameter-row { gap: 12px; }
+  .parameter-row { gap: 12px; flex-wrap: wrap; }
   .parameter-name { width: 100px; flex-basis: 100px; }
 }
 @media (max-width: 620px) {

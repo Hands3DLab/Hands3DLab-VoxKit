@@ -37,12 +37,16 @@ jobs:
           cmake --build build --parallel 2
       - name: Install Electron dependencies
         run: npm --prefix electron ci
+      - name: Protect macOS resources
+        run: npm --prefix electron run protect:mac
       - name: Package application
         run: |
           npx --yes electron-packager electron "Hands3DLab-VoxKit" \
             --platform=darwin --arch=arm64 --out=package --overwrite \
             --app-version=0.1.0 --icon=electron/assets/AppIcon.icns \
-            --extra-resource=build/voxkit
+            --asar --ignore='(^|/)config\.toml$|(^|/)scripts' \
+            --extra-resource=build/voxkit \
+            --extra-resource=electron/.protected/voxkit-config.enc.json
       - name: Create archive
         run: ditto -c -k --sequesterRsrc --keepParent "package/Hands3DLab-VoxKit-darwin-arm64/Hands3DLab-VoxKit.app" "Hands3DLab-VoxKit-0.1.0-macos-arm64.zip"
       - uses: actions/upload-artifact@v4
@@ -63,12 +67,16 @@ jobs:
           cmake --build build --parallel 2
       - name: Install Electron dependencies
         run: npm --prefix electron ci
+      - name: Protect macOS resources
+        run: npm --prefix electron run protect:mac
       - name: Package application
         run: |
           npx --yes electron-packager electron "Hands3DLab-VoxKit" \
             --platform=darwin --arch=x64 --out=package --overwrite \
             --app-version=0.1.0 --icon=electron/assets/AppIcon.icns \
-            --extra-resource=build/voxkit
+            --asar --ignore='(^|/)config\.toml$|(^|/)scripts' \
+            --extra-resource=build/voxkit \
+            --extra-resource=electron/.protected/voxkit-config.enc.json
       - name: Create archive
         run: ditto -c -k --sequesterRsrc --keepParent "package/Hands3DLab-VoxKit-darwin-x64/Hands3DLab-VoxKit.app" "Hands3DLab-VoxKit-0.1.0-macos-x64.zip"
       - uses: actions/upload-artifact@v4
@@ -97,7 +105,7 @@ jobs:
         run: >-
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
-          -DENABLE_GPU=OFF
+          -DENABLE_GPU=ON
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build embedded engine
@@ -116,6 +124,9 @@ jobs:
           node --check electron/src/main.cjs
           node --check electron/src/preload.cjs
           node --check electron/renderer/renderer.js
+      - name: Protect Windows resources
+        shell: pwsh
+        run: npm --prefix electron run protect:win
 
       - name: Package Windows client
         shell: pwsh
@@ -123,6 +134,8 @@ jobs:
           npx --yes electron-packager electron Hands3DLab-VoxKit
           --platform=win32 --arch=x64 --out=package --overwrite
           --app-version=0.1.0 --icon=electron/assets/AppIcon.ico
+          --asar --ignore="(^|/)config\.toml$|(^|/)scripts"
+          --extra-resource=electron/.protected/voxkit-config.enc.json
           --extra-resource=build/Release/voxkit.exe
 
       - name: Create archive
@@ -156,5 +169,12 @@ jobs:
         run: |
           tag="$RELEASE_TAG"
           if [ "$tag" = "main" ] || [ -z "$tag" ]; then tag="${{ inputs.tag }}"; fi
-          gh release upload "$tag" release-assets/* \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Hands3DLab-VoxKit 0.1.0" \
+              --generate-notes
+          fi

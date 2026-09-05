@@ -409,8 +409,14 @@ VoxelGrid voxelizeMesh(const std::string& path, int resolution, VoxelizationMode
     grid.mode = mode;
     if (hasColors) projectVertexColors(grid, positions, triangles, colors);
     return grid;
+  #elif defined(VOXKIT_ENABLE_D3D11)
+    if (backend) *backend = "d3d11-gpu";
+    VoxelGrid grid = voxelizeTrianglesD3D11(positions, triangles, resolution);
+    grid.mode = mode;
+    if (hasColors) projectVertexColors(grid, positions, triangles, colors);
+    return grid;
 #else
-    throw std::runtime_error("triangle mode requires a Metal GPU build (ENABLE_GPU=ON)");
+    throw std::runtime_error("triangle mode requires a supported GPU build (Metal on macOS or Direct3D 11 on Windows; ENABLE_GPU=ON)");
 #endif
   }
   if (backend) *backend = mode == VoxelizationMode::Quad ? "cpu-quad" : "cpu-pixel";

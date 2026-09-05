@@ -61,6 +61,12 @@ VoxelGrid voxelizeTrianglesMetal(
   const std::vector<std::array<std::uint32_t, 3>>& triangles,
   int resolution);
 #endif
+#if defined(VOXKIT_ENABLE_D3D11)
+VoxelGrid voxelizeTrianglesD3D11(
+  const std::vector<std::array<double, 3>>& positions,
+  const std::vector<std::array<std::uint32_t, 3>>& triangles,
+  int resolution);
+#endif
 void writeBinvox(const VoxelGrid& grid, const std::string& path);
 VoxelGrid readBinvox(const std::string& path);
 void writeVoxelColorSidecar(const VoxelGrid& grid, const std::string& binvoxPath);

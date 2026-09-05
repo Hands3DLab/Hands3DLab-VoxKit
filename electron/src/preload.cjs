@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('voxkit', {
   pickPrintOutput: (defaultPath) => ipcRenderer.invoke('dialog:save-print-output', defaultPath),
   pickModelOutput: (settings) => ipcRenderer.invoke('dialog:save-model-output', settings),
   getAboutConfig: () => ipcRenderer.invoke('about:config'),
+  getCapabilities: () => ipcRenderer.invoke('app:capabilities'),
   voxelize: (settings) => ipcRenderer.invoke('voxelize:start', settings),
   exportForSnapmakerU1: (settings) => ipcRenderer.invoke('print-export:snapmaker-u1', settings),
   exportModel: (settings) => ipcRenderer.invoke('model:export', settings),

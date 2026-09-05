@@ -21,6 +21,17 @@ std::string defaultOutput(const std::string& input)
   return p.string();
 }
 
+void printCapabilities()
+{
+#if defined(VOXKIT_ENABLE_METAL)
+  std::cout << "VOXKIT_CAPABILITIES triangle=true backend=metal-gpu" << std::endl;
+#elif defined(VOXKIT_ENABLE_D3D11)
+  std::cout << "VOXKIT_CAPABILITIES triangle=true backend=d3d11-gpu" << std::endl;
+#else
+  std::cout << "VOXKIT_CAPABILITIES triangle=false backend=cpu" << std::endl;
+#endif
+}
+
 void progress(int percent, const std::string& stage)
 {
   std::cout << "H3DL_PROGRESS " << percent << ' ' << stage << std::endl;
@@ -47,6 +58,9 @@ int main(int argc, char** argv)
       std::string arg = argv[i];
       if (arg == "-h" || arg == "--help") {
         usage();
+        return 0;
+      } else if (arg == "--capabilities") {
+        printCapabilities();
         return 0;
       } else if ((arg == "-r" || arg == "--resolution") && i + 1 < argc) {
         resolution = std::stoi(argv[++i]);

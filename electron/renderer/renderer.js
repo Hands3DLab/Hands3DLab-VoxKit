@@ -13,7 +13,7 @@
     '选择 STL 文件保存位置': 'Choose an STL output location', '下一步': 'Next', '开始转换': 'Start conversion',
     'OBJ 体素参数': 'OBJ voxel parameters', 'GLB 转换参数': 'GLB conversion parameters', 'STL 转换参数': 'STL conversion parameters',
     '体素分辨率': 'Voxel resolution', '边界盒最长边': 'Longest bounding-box edge', '体素化方案': 'Voxelization method',
-    '三角面方案使用 Metal GPU': 'Triangle mode uses Metal GPU', '像素化': 'Pixel', '三角面 GPU': 'Triangle GPU', '四边面': 'Quad',
+    '三角面方案使用 GPU': 'Triangle mode uses the GPU', '三角面方案需要启用 GPU 的构建（macOS Metal 或 Windows Direct3D 11）。': 'Triangle mode requires a GPU-enabled build (Metal on macOS or Direct3D 11 on Windows).', '像素化': 'Pixel', '三角面 GPU': 'Triangle GPU', '四边面': 'Quad',
     '填充模式': 'Fill mode', '输出体素内部': 'Fill voxel interior', '表面': 'Surface', '实体填充': 'Solid fill',
     '体素化质量': 'Voxelization quality', '速度与细节平衡': 'Balance speed and detail', '快速': 'Fast', '均衡': 'Balanced', '高质量': 'Quality',
     '模型预览': 'Model preview', '完成后生成': 'Generate after completion', '生成预览': 'Generate preview', '仅输出数据': 'Data only',
@@ -148,7 +148,7 @@
   const state = {
     format: 'obj', outputFormat: 'stl', step: 1, inputPath: '', outputPath: '', outputPathAuto: true, resolution: 128, voxelMode: 'pixel', fill: 'surface', quality: 'balanced', preview: 'yes', splitParts: 'no',
     converting: false, progress: 0, logs: [], result: null, exportingPrint: false, printOutputPath: '',
-    conversion: null, printers: [], historyRecords: [], pendingPrinterId: '', directPrintState: 'idle'
+    conversion: null, printers: [], historyRecords: [], pendingPrinterId: '', directPrintState: 'idle', triangleVoxelization: false
   };
 
   const $ = (id) => document.getElementById(id);
@@ -258,8 +258,25 @@
     $$('button', group).forEach((button) => button.classList.toggle('selected', button.dataset.value === value));
   }
 
+  function applyVoxelCapabilities(capabilities = {}) {
+    state.triangleVoxelization = capabilities.triangleVoxelization === true;
+    const triangleButton = $('parameterStep').querySelector('[data-setting="voxelMode"] button[data-value="triangle"]');
+    if (!triangleButton) return;
+    triangleButton.disabled = !state.triangleVoxelization || state.converting;
+    if (!state.triangleVoxelization) {
+      triangleButton.title = localizeText('三角面方案需要启用 GPU 的构建（macOS Metal 或 Windows Direct3D 11）。');
+      triangleButton.setAttribute('aria-label', `${triangleButton.textContent} — ${triangleButton.title}`);
+      if (state.voxelMode === 'triangle') {
+        state.voxelMode = 'pixel';
+        setSegmentedValue(triangleButton.parentElement, state.voxelMode);
+      }
+    } else {
+      triangleButton.removeAttribute('title');
+      triangleButton.removeAttribute('aria-label');
+    }
+  }
+
   function collectSettings() {
-    const value = (id) => $(id).value;
     return { inputPath: state.inputPath, outputPath: state.outputPath, outputFormat: state.outputFormat, resolution: state.resolution, voxelMode: state.voxelMode, splitParts: state.splitParts === 'yes' };
   }
 
@@ -272,6 +289,7 @@
     $('outputPicker').disabled = converting;
     $$('button', $('outputFormat')).forEach((button) => { button.disabled = converting; });
     $$('.format-item').forEach((button) => { button.disabled = converting; });
+    applyVoxelCapabilities({ triangleVoxelization: state.triangleVoxelization });
     $$('.step-button').forEach((button) => { button.disabled = converting || (Number(button.dataset.step) === 2 && (!state.inputPath || !state.outputPath)); });
     updateReadiness();
   }
@@ -578,14 +596,17 @@
       list.innerHTML = records.map((record) => {
         const date = new Date(record.exportedAt);
         const dateText = Number.isNaN(date.getTime()) ? localizeText('未知时间') : date.toLocaleString(language === 'en' ? 'en-US' : 'zh-CN', { hour12: false });
-        const filePath = record.artifactPath || record.outputPath || record.sourcePath;
-        const operation = record.operation === 'direct-send' ? t('history.sent', { name: record.printerName || record.slicerName || localizeText('打印机') }) : t('history.exported', { name: record.printer || localizeText('打印文件') });
+        const failed = record.status === 'failed';
+        const filePath = record.artifactPath || record.outputPath || '';
+        const displayPath = filePath || record.sourcePath || localizeText('未知文件');
+        const operation = failed ? (record.error || localizeText('导出失败')) : record.operation === 'direct-send' ? t('history.sent', { name: record.printerName || record.slicerName || localizeText('打印机') }) : t('history.exported', { name: record.printer || localizeText('打印文件') });
         const hasDetail = Boolean(record.conversion && (record.conversion.outputPath || record.conversion.sourcePath));
-        return `<article class="record-item" data-record-id="${escapeHtml(record.id)}" data-output-path="${escapeHtml(filePath)}">
-          <span class="record-icon"><i class="ph-thin ph-cube" aria-hidden="true"></i></span>
-          <div class="record-main"><strong>${escapeHtml(basename(filePath))}</strong><span>${escapeHtml(operation)} · ${escapeHtml(record.format || 'STL')} · ${escapeHtml(formatBytes(record.bytes))}</span><small title="${escapeHtml(filePath)}">${escapeHtml(filePath)}</small></div>
+        const fileActionsDisabled = failed || !filePath;
+        return `<article class="record-item${failed ? ' failed' : ''}" data-record-id="${escapeHtml(record.id)}" data-output-path="${escapeHtml(filePath)}">
+          <span class="record-icon"><i class="ph-thin ${failed ? 'ph-warning' : 'ph-cube'}" aria-hidden="true"></i></span>
+          <div class="record-main"><strong>${escapeHtml(basename(displayPath))}</strong><span>${escapeHtml(operation)} · ${escapeHtml(record.format || '—')}${record.bytes ? ` · ${escapeHtml(formatBytes(record.bytes))}` : ''}</span><small title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</small></div>
           <time datetime="${escapeHtml(record.exportedAt || '')}">${escapeHtml(dateText)}</time>
-          <div class="record-actions">${hasDetail ? `<button data-action="detail" title="${escapeHtml(localizeText('查看详情'))}"><i class="ph-thin ph-eye" aria-hidden="true"></i></button>` : ''}<button data-action="open" title="${escapeHtml(localizeText('打开文件'))}"><i class="ph-thin ph-arrow-square-out" aria-hidden="true"></i></button><button data-action="reveal" title="${escapeHtml(localizeText('在 Finder 中显示'))}"><i class="ph-thin ph-folder-open" aria-hidden="true"></i></button><button data-action="remove" class="record-remove" title="${escapeHtml(localizeText('从记录中移除'))}"><i class="ph-thin ph-trash" aria-hidden="true"></i></button></div>
+          <div class="record-actions">${hasDetail ? `<button data-action="detail" title="${escapeHtml(localizeText('查看详情'))}"><i class="ph-thin ph-eye" aria-hidden="true"></i></button>` : ''}<button data-action="open" ${fileActionsDisabled ? 'disabled' : ''} title="${escapeHtml(localizeText('打开文件'))}"><i class="ph-thin ph-arrow-square-out" aria-hidden="true"></i></button><button data-action="reveal" ${fileActionsDisabled ? 'disabled' : ''} title="${escapeHtml(localizeText('在 Finder 中显示'))}"><i class="ph-thin ph-folder-open" aria-hidden="true"></i></button><button data-action="remove" class="record-remove" title="${escapeHtml(localizeText('从记录中移除'))}"><i class="ph-thin ph-trash" aria-hidden="true"></i></button></div>
         </article>`;
       }).join('');
     } catch (error) {
@@ -778,6 +799,7 @@
   $$('[data-setting]').forEach((group) => group.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-value]');
     if (!button) return;
+    if (group.dataset.setting === 'voxelMode' && button.dataset.value === 'triangle' && !state.triangleVoxelization) return;
     setSegmentedValue(group, button.dataset.value);
     if (group.dataset.setting === 'resolution') state.resolution = Number(button.dataset.value);
     if (group.dataset.setting === 'voxelMode') state.voxelMode = button.dataset.value;
@@ -937,6 +959,7 @@
     syncFormatUI();
     if (state.result) showResult(state.result);
     translateStaticText();
+    applyVoxelCapabilities({ triangleVoxelization: state.triangleVoxelization });
     syncFormatUI();
     renderAboutConfig(aboutConfig);
     if (state.result) showResult(state.result);
@@ -952,6 +975,7 @@
   window.voxkit.onProgress(showProgress);
   window.voxkit.onPrintExportProgress(showPrintProgress);
   window.voxkit.onModelExportProgress(showPrintProgress);
+  window.voxkit.getCapabilities().then(applyVoxelCapabilities).catch(() => applyVoxelCapabilities());
   window.voxkit.listPrinters(language).then((printers) => {
     state.printers = printers || [];
     state.pendingPrinterId = state.printers.find((printer) => printer.enabled)?.id || '';

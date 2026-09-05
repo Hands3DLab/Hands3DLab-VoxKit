@@ -1,7 +1,8 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const { spawn } = require('node:child_process');
+const crypto = require('node:crypto');
+const { spawn, spawnSync } = require('node:child_process');
 const readline = require('node:readline');
 
 let mainWindow;
@@ -96,6 +97,27 @@ function parseAboutToml(source) {
   return result;
 }
 function readAboutConfig() {
+  if (app.isPackaged) {
+    const protectedFile = path.join(process.resourcesPath, 'voxkit-config.enc.json');
+    try {
+      const envelope = JSON.parse(fs.readFileSync(protectedFile, 'utf8'));
+      if (envelope.algorithm !== 'aes-256-gcm' || envelope.format !== 1) throw new Error('unsupported protected resource format');
+      const version = app.getVersion();
+      if (envelope.platform !== process.platform || envelope.version !== version) throw new Error('platform/version mismatch');
+      const key = crypto.createHash('sha256')
+        .update(`Hands3DLab-VoxKit/resource/${process.platform}/${version}`)
+        .digest();
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(envelope.iv, 'base64'));
+      decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+      const source = Buffer.concat([
+        decipher.update(Buffer.from(envelope.data, 'base64')),
+        decipher.final()
+      ]).toString('utf8');
+      return parseAboutToml(source);
+    } catch (error) {
+      throw new Error(`Protected application resources are invalid or have been modified: ${error.message}`);
+    }
+  }
   const file = path.join(projectRoot(), 'config.toml');
   try { return parseAboutToml(fs.readFileSync(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
@@ -108,7 +130,7 @@ function readExportRecords() {
   try {
     const parsed = JSON.parse(fs.readFileSync(exportRecordsPath(), 'utf8'));
     return Array.isArray(parsed.records) ? parsed.records.filter((record) => (
-      record && typeof record.id === 'string' && typeof record.outputPath === 'string'
+      record && typeof record.id === 'string' && ['success', 'failed', 'cancelled'].includes(record.status || 'success')
     )) : [];
   } catch (error) {
     if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
@@ -127,6 +149,31 @@ function addExportRecord(record) {
   records.unshift(record);
   writeExportRecords(records.slice(0, 500));
 }
+function failedExportRecord(operation, settings, error) {
+  const outputPath = typeof settings?.outputPath === 'string' ? settings.outputPath : '';
+  const inputPath = typeof settings?.inputPath === 'string' ? settings.inputPath : '';
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    status: 'failed',
+    exportedAt: new Date().toISOString(),
+    failedAt: new Date().toISOString(),
+    operation,
+    format: String(settings?.format || path.extname(outputPath).slice(1) || '').toUpperCase(),
+    sourcePath: inputPath,
+    originalSourcePath: settings?.originalSourcePath || inputPath,
+    ...(outputPath ? { outputPath } : {}),
+    error: error?.message || String(error),
+    conversion: normalizeConversion(settings?.conversion)
+  };
+}
+async function recordExportFailure(operation, settings, task) {
+  try {
+    return await task();
+  } catch (error) {
+    addExportRecord(failedExportRecord(operation, settings, error));
+    throw error;
+  }
+}
 function locateVoxkit() {
   const binaryName = process.platform === 'win32' ? 'voxkit.exe' : 'voxkit';
   const candidates = [
@@ -136,6 +183,16 @@ function locateVoxkit() {
     path.join(process.resourcesPath, binaryName)
   ].filter(Boolean);
   return candidates.find((file) => { try { return fs.statSync(file).isFile(); } catch { return false; } });
+}
+function nativeCapabilities() {
+  const binary = locateVoxkit();
+  if (!binary) return { triangleVoxelization: false, gpuBackend: null };
+  const result = spawnSync(binary, ['--capabilities'], { cwd: projectRoot(), encoding: 'utf8', windowsHide: true });
+  const line = String(result.stdout || '').split(/\r?\n/).find((value) => value.startsWith('VOXKIT_CAPABILITIES ')) || '';
+  return {
+    triangleVoxelization: /\btriangle=true\b/.test(line),
+    gpuBackend: line.match(/\bbackend=([^\s]+)/)?.[1] || null
+  };
 }
 function sendProgress(payload) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('voxelize:progress', payload); }
 const progressMessages = {
@@ -177,6 +234,9 @@ async function voxelize(settings) {
   const outputFormat = String(settings?.outputFormat || 'stl').toLowerCase();
   if (!settings || typeof settings.inputPath !== 'string' || typeof settings.outputPath !== 'string' || !['obj', 'stl', 'binvox', '3mf'].includes(outputFormat)) {
     throw localizedError(locale, '体素化参数或输出格式无效。', 'Invalid voxelization parameters or output format.');
+  }
+  if (settings.voxelMode === 'triangle' && !nativeCapabilities().triangleVoxelization) {
+    throw localizedError(locale, '三角面方案需要启用 GPU 的构建（macOS Metal 或 Windows Direct3D 11）。', 'Triangle mode requires a GPU-enabled build (Metal on macOS or Direct3D 11 on Windows).');
   }
   if (!fs.existsSync(settings.inputPath)) throw localizedError(locale, '找不到源模型文件。', 'The source model file could not be found.');
   if (path.resolve(settings.inputPath) === path.resolve(settings.outputPath)) throw localizedError(locale, '输出文件不能覆盖源模型。', 'The output file cannot overwrite the source model.');
@@ -444,6 +504,10 @@ function createWindow() {
     ...macWindowChrome,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: false, webviewTag: false }
   });
+  if (process.platform === 'win32') {
+    mainWindow.setMenuBarVisibility(false);
+    mainWindow.setAutoHideMenuBar(true);
+  }
   const openInSystemBrowser = (url) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   };
@@ -465,6 +529,7 @@ function createWindow() {
 }
 app.whenReady().then(() => {
   app.setName(APP_NAME);
+  if (process.platform === 'win32') Menu.setApplicationMenu(null);
   const appIcon = loadAppIcon();
   if (process.platform === 'darwin' && appIcon) app.dock.setIcon(appIcon);
   ipcMain.handle('dialog:open-input', async (_event, settings = {}) => {
@@ -474,6 +539,7 @@ app.whenReady().then(() => {
     return result.canceled ? null : result.filePaths[0];
   });
   ipcMain.handle('about:config', () => readAboutConfig());
+  ipcMain.handle('app:capabilities', () => ({ ...nativeCapabilities(), platform: process.platform }));
   ipcMain.handle('dialog:save-output', async (_event, settings = {}) => {
     const format = String(settings.format || 'stl').toLowerCase();
     if (!['obj', 'stl', 'binvox', '3mf'].includes(format)) throw localizedError(settings.locale, '不支持的体素输出格式。', 'Unsupported voxel output format.');
@@ -505,8 +571,8 @@ app.whenReady().then(() => {
     return path.extname(result.filePath).toLowerCase() === `.${format}` ? result.filePath : `${result.filePath}.${format}`;
   });
   ipcMain.handle('voxelize:start', (_event, settings) => voxelize(settings));
-  ipcMain.handle('print-export:snapmaker-u1', (_event, settings) => exportForSnapmakerU1(settings));
-  ipcMain.handle('model:export', (_event, settings) => exportModel(settings));
+  ipcMain.handle('print-export:snapmaker-u1', (_event, settings) => recordExportFailure('print-export', settings, () => exportForSnapmakerU1(settings)));
+  ipcMain.handle('model:export', (_event, settings) => recordExportFailure('model-export', settings, () => exportModel(settings)));
   ipcMain.handle('printers:list', () => PRINTERS.map(({ id, name, enabled, buildVolume }) => ({ id, name, enabled, buildVolume })));
   ipcMain.handle('print:inspect', (_event, settings) => inspectPrintModel(settings));
   ipcMain.handle('print:send', (_event, settings) => sendToPrinter(settings));

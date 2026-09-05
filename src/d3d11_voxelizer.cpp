@@ -1,5 +1,9 @@
 #ifdef _WIN32
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "voxelizer.hpp"
 
 #include <d3d11.h>

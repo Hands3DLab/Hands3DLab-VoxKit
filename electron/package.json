@@ -20,7 +20,7 @@
     ],
     "extraResources": [
       {
-        "from": ".protected/config.enc.json",
+        "from": ".protected/voxkit-config.enc.json",
         "to": "voxkit-config.enc.json"
       }
     ]

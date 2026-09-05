@@ -163,8 +163,8 @@ VoxelGrid voxelizeTrianglesD3D11(
   gpuPositions.reserve(positions.size());
   for (const auto& position : positions) {
     for (int axis = 0; axis < 3; ++axis) {
-      minimum[axis] = std::min(minimum[axis], position[axis]);
-      maximum[axis] = std::max(maximum[axis], position[axis]);
+      minimum[axis] = (std::min)(minimum[axis], position[axis]);
+      maximum[axis] = (std::max)(maximum[axis], position[axis]);
     }
     gpuPositions.push_back({static_cast<float>(position[0]), static_cast<float>(position[1]), static_cast<float>(position[2]), 0.0f});
   }
@@ -172,7 +172,7 @@ VoxelGrid voxelizeTrianglesD3D11(
   gpuTriangles.reserve(triangles.size());
   for (const auto& triangle : triangles) gpuTriangles.push_back({triangle[0], triangle[1], triangle[2], 0});
 
-  const double span = std::max({maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 1e-9});
+  const double span = (std::max)({maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 1e-9});
   const double extent = span + 2.0 * (span * 0.005 + 1e-9);
   const double voxelSize = extent / resolution;
   const std::array<double, 3> origin = {
@@ -228,7 +228,7 @@ VoxelGrid voxelizeTrianglesD3D11(
   constexpr std::uint32_t threadsPerGroup = 64;
   constexpr std::uint32_t maxTrianglesPerDispatch = 65535u * threadsPerGroup;
   for (std::uint32_t offset = 0; offset < triangles.size(); offset += maxTrianglesPerDispatch) {
-    const std::uint32_t count = std::min<std::uint32_t>(maxTrianglesPerDispatch,
+    const std::uint32_t count = (std::min)<std::uint32_t>(maxTrianglesPerDispatch,
       static_cast<std::uint32_t>(triangles.size() - offset));
     const Params params{static_cast<std::uint32_t>(resolution), static_cast<std::uint32_t>(triangles.size()),
                         static_cast<float>(voxelSize), offset,

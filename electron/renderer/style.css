@@ -125,6 +125,10 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 
 /* ── Parameters ── */
 .parameter-sheet { overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.9); box-shadow: 0 1px 2px rgba(0,0,0,.025); }
+.d3d-guide { margin: 0 0 12px; padding: 12px 14px; border: 1px solid #f0c36a; border-radius: 12px; background: #fff8e8; color: #684d16; font-size: 12px; line-height: 1.55; }
+.d3d-guide strong { display: block; margin-bottom: 3px; font-size: 13px; }
+.d3d-guide p { margin: 0 0 5px; }
+.d3d-guide a { color: #785811; text-decoration: underline; }
 .parameter-row { display: flex; align-items: center; gap: 20px; min-height: 78px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .parameter-row:last-child { border-bottom: 0; }
 .parameter-name { width: 124px; display: flex; flex-direction: column; gap: 5px; flex: 0 0 124px; }

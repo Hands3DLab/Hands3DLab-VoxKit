@@ -36,6 +36,15 @@ const PRINTERS = Object.freeze([
 const isEnglish = (locale) => locale === 'en';
 const localized = (locale, zh, en) => isEnglish(locale) ? en : zh;
 const localizedError = (locale, zh, en) => new Error(localized(locale, zh, en));
+function isDirect3dFailure(message) {
+  return process.platform === 'win32' && /Direct3D|D3D11|D3DCOMPILER|DXGI|feature level|HLSL/i.test(String(message));
+}
+function direct3dGuidance(locale, detail) {
+  const guidance = localized(locale,
+    'Windows Direct3D 11 当前不可用。请依次：1. 运行 Windows Update；2. 从 NVIDIA、AMD 或 Intel 官网安装最新显卡驱动；3. 确认系统支持 Direct3D 11；4. 如提示缺少 DirectX 组件，请通过 Microsoft 官方渠道安装 DirectX End-User Runtime；5. 重启应用后重试。请勿从第三方 DLL 网站下载 D3D11.dll 或 D3DCOMPILER_47.dll。',
+    'Windows Direct3D 11 is not available. Please: 1. run Windows Update; 2. install the latest graphics driver from NVIDIA, AMD, or Intel; 3. confirm that the system supports Direct3D 11; 4. if a DirectX component is missing, install the DirectX End-User Runtime through an official Microsoft channel; 5. restart the app and try again. Do not download D3D11.dll or D3DCOMPILER_47.dll from unofficial DLL websites.');
+  return `${guidance}\n\n${detail}`;
+}
 
 function loadAppIcon() {
   for (const file of [APP_ICON, APP_ICON_FALLBACK]) {
@@ -197,9 +206,11 @@ function nativeCapabilities() {
     cwd: nativeWorkingDirectory(binary), encoding: 'utf8', windowsHide: true
   });
   const line = String(result.stdout || '').split(/\r?\n/).find((value) => value.startsWith('VOXKIT_CAPABILITIES ')) || '';
+  const detail = String(result.stderr || result.error?.message || '').trim();
   return {
     triangleVoxelization: /\btriangle=true\b/.test(line),
-    gpuBackend: line.match(/\bbackend=([^\s]+)/)?.[1] || null
+    gpuBackend: line.match(/\bbackend=([^\s]+)/)?.[1] || null,
+    ...(detail ? { gpuError: detail } : {})
   };
 }
 function sendProgress(payload) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('voxelize:progress', payload); }
@@ -243,8 +254,11 @@ async function voxelize(settings) {
   if (!settings || typeof settings.inputPath !== 'string' || typeof settings.outputPath !== 'string' || !['obj', 'stl', 'binvox', '3mf'].includes(outputFormat)) {
     throw localizedError(locale, '体素化参数或输出格式无效。', 'Invalid voxelization parameters or output format.');
   }
-  if (settings.voxelMode === 'triangle' && !nativeCapabilities().triangleVoxelization) {
-    throw localizedError(locale, '三角面方案需要启用 GPU 的构建（macOS Metal 或 Windows Direct3D 11）。', 'Triangle mode requires a GPU-enabled build (Metal on macOS or Direct3D 11 on Windows).');
+  const capability = nativeCapabilities();
+  if (settings.voxelMode === 'triangle' && !capability.triangleVoxelization) {
+    const message = 'Triangle mode requires a GPU-enabled build (Metal on macOS or Direct3D 11 on Windows).';
+    if (process.platform === 'win32') throw new Error(direct3dGuidance(locale, capability.gpuError || message));
+    throw localizedError(locale, '三角面方案需要启用 GPU 的构建（macOS Metal 或 Windows Direct3D 11）。', message);
   }
   if (!fs.existsSync(settings.inputPath)) throw localizedError(locale, '找不到源模型文件。', 'The source model file could not be found.');
   if (path.resolve(settings.inputPath) === path.resolve(settings.outputPath)) throw localizedError(locale, '输出文件不能覆盖源模型。', 'The output file cannot overwrite the source model.');
@@ -266,7 +280,10 @@ async function voxelize(settings) {
   const voxelProgressScale = outputFormat === 'binvox' ? 1 : 0.78;
   const result = await runVoxelizer(binary, args, 'voxelize:progress', (value) => value * voxelProgressScale, locale);
   if (cancelRequested) return { cancelled: true, outputPath: settings.outputPath, voxelDataPath, outputFormat };
-  if (result.code !== 0) throw new Error(result.stderr || localized(locale, `体素化失败（退出码 ${result.code}）`, `Voxelization failed (exit code ${result.code})`));
+  if (result.code !== 0) {
+    const detail = result.stderr || localized(locale, `体素化失败（退出码 ${result.code}）`, `Voxelization failed (exit code ${result.code})`);
+    throw new Error(isDirect3dFailure(detail) ? direct3dGuidance(locale, detail) : detail);
+  }
   const report = {};
   const line = result.stdout.split('\n').find((item) => item.startsWith('VOXKIT_RESULT ')) || '';
   for (const match of line.matchAll(/([a-zA-Z_]+)=("[^"]*"|[^ ]+)/g)) report[match[1]] = match[2].replace(/^"|"$/g, '');

@@ -14,6 +14,7 @@
     'OBJ 体素参数': 'OBJ voxel parameters', 'GLB 转换参数': 'GLB conversion parameters', 'STL 转换参数': 'STL conversion parameters',
     '体素分辨率': 'Voxel resolution', '边界盒最长边': 'Longest bounding-box edge', '体素化方案': 'Voxelization method',
     '三角面方案使用 GPU': 'Triangle mode uses the GPU', '三角面方案需要启用 GPU 的构建（macOS Metal 或 Windows Direct3D 11）。': 'Triangle mode requires a GPU-enabled build (Metal on macOS or Direct3D 11 on Windows).', '像素化': 'Pixel', '三角面 GPU': 'Triangle GPU', '四边面': 'Quad',
+    'Windows Direct3D 11 不可用': 'Windows Direct3D 11 unavailable', '请运行 Windows Update，并从 NVIDIA、AMD 或 Intel 官网安装最新显卡驱动。': 'Run Windows Update and install the latest graphics driver from NVIDIA, AMD, or Intel.', '打开 Microsoft Windows 更新说明': 'Open Microsoft Windows Update guidance',
     '填充模式': 'Fill mode', '输出体素内部': 'Fill voxel interior', '表面': 'Surface', '实体填充': 'Solid fill',
     '体素化质量': 'Voxelization quality', '速度与细节平衡': 'Balance speed and detail', '快速': 'Fast', '均衡': 'Balanced', '高质量': 'Quality',
     '模型预览': 'Model preview', '完成后生成': 'Generate after completion', '生成预览': 'Generate preview', '仅输出数据': 'Data only',
@@ -262,15 +263,28 @@
     state.triangleVoxelization = capabilities.triangleVoxelization === true;
     const triangleButton = $('parameterStep').querySelector('[data-setting="voxelMode"] button[data-value="triangle"]');
     if (!triangleButton) return;
+    const guide = $('d3dGuide') || (() => {
+      const element = document.createElement('div');
+      element.id = 'd3dGuide'; element.className = 'd3d-guide'; element.setAttribute('role', 'status');
+      element.innerHTML = '<strong></strong><p></p><a href="https://support.microsoft.com/windows/update-windows" target="_blank" rel="noopener noreferrer"></a>';
+      $('parameterStep').prepend(element); return element;
+    })();
     triangleButton.disabled = !state.triangleVoxelization || state.converting;
     if (!state.triangleVoxelization) {
       triangleButton.title = localizeText('三角面方案需要启用 GPU 的构建（macOS Metal 或 Windows Direct3D 11）。');
       triangleButton.setAttribute('aria-label', `${triangleButton.textContent} — ${triangleButton.title}`);
+      guide.classList.toggle('hidden', !capabilities.gpuError && capabilities.platform !== 'win32');
+      if (capabilities.platform === 'win32') {
+        guide.querySelector('strong').textContent = localizeText('Windows Direct3D 11 不可用');
+        guide.querySelector('p').textContent = localizeText('请运行 Windows Update，并从 NVIDIA、AMD 或 Intel 官网安装最新显卡驱动。');
+        guide.querySelector('a').textContent = localizeText('打开 Microsoft Windows 更新说明');
+      }
       if (state.voxelMode === 'triangle') {
         state.voxelMode = 'pixel';
         setSegmentedValue(triangleButton.parentElement, state.voxelMode);
       }
     } else {
+      guide.classList.add('hidden');
       triangleButton.removeAttribute('title');
       triangleButton.removeAttribute('aria-label');
     }

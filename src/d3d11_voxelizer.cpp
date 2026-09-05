@@ -48,10 +48,10 @@ uint index3(uint3 cell, uint resolution) {
 void main(uint3 dispatchId : SV_DispatchThreadID) {
   uint tid = p.triangleOffset + dispatchId.x;
   if (tid >= p.triangleCount) return;
-  uint4 triangle = triangles[tid];
-  float3 a = positions[triangle.x].xyz;
-  float3 b = positions[triangle.y].xyz;
-  float3 c = positions[triangle.z].xyz;
+  uint4 triIndices = triangles[tid];
+  float3 a = positions[triIndices.x].xyz;
+  float3 b = positions[triIndices.y].xyz;
+  float3 c = positions[triIndices.z].xyz;
   float3 minimum = min(a, min(b, c));
   float3 maximum = max(a, max(b, c));
   int3 lo = max(int3(0, 0, 0), int3(floor((minimum - origin.xyz) / p.voxelSize)) - 1);

@@ -184,10 +184,18 @@ function locateVoxkit() {
   ].filter(Boolean);
   return candidates.find((file) => { try { return fs.statSync(file).isFile(); } catch { return false; } });
 }
+function nativeWorkingDirectory(binary) {
+  // In a packaged application, __dirname is inside app.asar. Windows cannot use
+  // that virtual archive path as CreateProcess' working directory; doing so
+  // makes spawn/spawnSync report ENOENT even when resources/voxkit.exe exists.
+  return app.isPackaged ? path.dirname(binary) : projectRoot();
+}
 function nativeCapabilities() {
   const binary = locateVoxkit();
   if (!binary) return { triangleVoxelization: false, gpuBackend: null };
-  const result = spawnSync(binary, ['--capabilities'], { cwd: projectRoot(), encoding: 'utf8', windowsHide: true });
+  const result = spawnSync(binary, ['--capabilities'], {
+    cwd: nativeWorkingDirectory(binary), encoding: 'utf8', windowsHide: true
+  });
   const line = String(result.stdout || '').split(/\r?\n/).find((value) => value.startsWith('VOXKIT_CAPABILITIES ')) || '';
   return {
     triangleVoxelization: /\btriangle=true\b/.test(line),
@@ -211,7 +219,7 @@ function localizeProgressMessage(message, locale) {
 }
 function runVoxelizer(binary, args, progressChannel = 'voxelize:progress', mapProgress = (value) => value, locale = 'zh-CN') {
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, { cwd: projectRoot() });
+    const child = spawn(binary, args, { cwd: nativeWorkingDirectory(binary), windowsHide: true });
     activeProcess = child;
     let stdout = ''; let stderr = '';
     const handle = (line, error = false) => {

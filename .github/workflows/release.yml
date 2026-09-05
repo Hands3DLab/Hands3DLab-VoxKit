@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, for example v0.1.0'
+        required: true
+        default: 'v0.1.0'
+      platform:
+        description: 'Desktop platform to package'
+        required: true
+        type: choice
+        options:
+          - all
+          - macos
+          - windows
+        default: all
+
+permissions:
+  contents: write
+
+jobs:
+  macos-app:
+    name: Electron app (macOS arm64)
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos' }}
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install boost
+      - name: Build embedded engine
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_GPU=ON
+          cmake --build build --parallel 2
+      - name: Install Electron dependencies
+        run: npm --prefix electron ci
+      - name: Package application
+        run: |
+          npx --yes electron-packager electron "Hands3DLab-VoxKit" \
+            --platform=darwin --arch=arm64 --out=package --overwrite \
+            --app-version=0.1.0 --icon=electron/assets/AppIcon.icns \
+            --extra-resource=build/voxkit
+      - name: Create archive
+        run: ditto -c -k --sequesterRsrc --keepParent "package/Hands3DLab-VoxKit-darwin-arm64/Hands3DLab-VoxKit.app" "Hands3DLab-VoxKit-0.1.0-macos-arm64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hands3DLab-VoxKit-0.1.0-macos-arm64.zip
+          path: Hands3DLab-VoxKit-0.1.0-macos-arm64.zip
+
+  macos-app-intel:
+    name: Electron app (macOS x64)
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos' }}
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install boost
+      - name: Build embedded engine
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_GPU=ON
+          cmake --build build --parallel 2
+      - name: Install Electron dependencies
+        run: npm --prefix electron ci
+      - name: Package application
+        run: |
+          npx --yes electron-packager electron "Hands3DLab-VoxKit" \
+            --platform=darwin --arch=x64 --out=package --overwrite \
+            --app-version=0.1.0 --icon=electron/assets/AppIcon.icns \
+            --extra-resource=build/voxkit
+      - name: Create archive
+        run: ditto -c -k --sequesterRsrc --keepParent "package/Hands3DLab-VoxKit-darwin-x64/Hands3DLab-VoxKit.app" "Hands3DLab-VoxKit-0.1.0-macos-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hands3DLab-VoxKit-0.1.0-macos-x64.zip
+          path: Hands3DLab-VoxKit-0.1.0-macos-x64.zip
+
+  windows-app:
+    name: Electron app (Windows x64)
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Boost.JSON
+        shell: pwsh
+        run: vcpkg install boost-json:x64-windows
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Configure embedded engine
+        shell: pwsh
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DENABLE_GPU=OFF
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build embedded engine
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Run native tests
+        shell: pwsh
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Install Electron dependencies
+        run: npm --prefix electron ci
+
+      - name: Check Electron sources
+        shell: pwsh
+        run: |
+          node --check electron/src/main.cjs
+          node --check electron/src/preload.cjs
+          node --check electron/renderer/renderer.js
+
+      - name: Package Windows client
+        shell: pwsh
+        run: >-
+          npx --yes electron-packager electron Hands3DLab-VoxKit
+          --platform=win32 --arch=x64 --out=package --overwrite
+          --app-version=0.1.0 --icon=electron/assets/AppIcon.ico
+          --extra-resource=build/Release/voxkit.exe
+
+      - name: Create archive
+        shell: pwsh
+        run: Compress-Archive -Path package/Hands3DLab-VoxKit-win32-x64 -DestinationPath Hands3DLab-VoxKit-0.1.0-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hands3DLab-VoxKit-0.1.0-windows-x64.zip
+          path: Hands3DLab-VoxKit-0.1.0-windows-x64.zip
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-24.04
+    if: >-
+      ${{ always()
+          && (needs.macos-app.result == 'success' || needs.macos-app.result == 'skipped')
+          && (needs.macos-app-intel.result == 'success' || needs.macos-app-intel.result == 'skipped')
+          && (needs.windows-app.result == 'success' || needs.windows-app.result == 'skipped') }}
+    needs: [macos-app, macos-app-intel, windows-app]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+      
+        run: |
+          tag="$RELEASE_TAG"
+          if [ "$tag" = "main" ] || [ -z "$tag" ]; then tag="${{ inputs.tag }}"; fi
+          gh release upload "$tag" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" --clobber

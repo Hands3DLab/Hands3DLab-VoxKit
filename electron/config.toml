@@ -1,0 +1,61 @@
+[about]
+name = "Hands3DLab-VoxKit"
+description = "离线 3D 模型体素化工具"
+descriptionEn = "Offline 3D model voxelizer"
+version = "Hands3DLab · v0.1.0"
+creator = "Created by Hands3DLab"
+creatorUrl = "https://www.hands3dlab.com"
+
+[[changelog]]
+version = "v0.1.0"
+date = "2025"
+summary = "首个公开版本"
+summaryEn = "Initial public release"
+items = ["支持 OBJ、GLB 与 STL 模型输入", "支持 STL、OBJ、BINVOX 与 3MF 导出", "提供 Metal GPU 体素化方案"]
+itemsEn = ["Supports OBJ, GLB, and STL model input", "Exports STL, OBJ, BINVOX, and 3MF", "Includes Metal GPU voxelization"]
+
+[social.bilibili]
+name = "B站"
+nameEn = "Bilibili"
+url = "https://space.bilibili.com/470205874"
+linkText = "打开主页"
+linkTextEn = "Open profile"
+platform = "bilibili"
+
+[social.video]
+name = "视频号"
+nameEn = "WeChat Channels"
+qr = "../assets/social/qr_shipinghao.jpg"
+platform = "video"
+
+[social.douyin]
+name = "抖音"
+nameEn = "Douyin"
+url = "https://www.douyin.com/user/MS4wLjABAAAAIym77h9eoJvkkyi3HFhsmeZ9k3KIbIrV-BHTYA-Rm5w"
+qr = "../assets/social/qr_douyin.jpg"
+linkText = "打开主页"
+linkTextEn = "Open profile"
+platform = "douyin"
+
+[social.xiaohongshu]
+name = "小红书"
+nameEn = "RED"
+url = "https://www.xiaohongshu.com/user/profile/5d08d0ab000000001003a65c"
+linkText = "打开主页"
+linkTextEn = "Open profile"
+platform = "xiaohongshu"
+
+[contact.website]
+name = "官网"
+nameEn = "Website"
+value = "www.hands3dlab.com"
+url = "https://www.hands3dlab.com"
+linkText = "访问官网"
+linkTextEn = "Visit website"
+platform = "globe"
+
+[contact.wechat]
+name = "微信"
+nameEn = "WeChat"
+qr = "../assets/social/qr_wechat.jpg"
+platform = "chat"

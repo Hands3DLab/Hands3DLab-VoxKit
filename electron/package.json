@@ -1,0 +1,26 @@
+{
+  "name": "hands3dlab-voxkit",
+  "productName": "Hands3DLab-VoxKit",
+  "version": "0.1.0",
+  "description": "Hands3DLab voxelization desktop app",
+  "main": "src/main.cjs",
+  "build": {
+    "productName": "Hands3DLab-VoxKit",
+    "mac": {
+      "icon": "assets/AppIcon.icns"
+    },
+    "win": {
+      "icon": "assets/AppIcon.ico"
+    }
+  },
+  "scripts": {
+    "start": "electron .",
+    "build": "cmake -S .. -B ../build -DCMAKE_BUILD_TYPE=Release && cmake --build ../build --parallel 2"
+  },
+  "devDependencies": {
+    "electron": "^32.3.3"
+  },
+  "dependencies": {
+    "@phosphor-icons/web": "^2.1.2"
+  }
+}

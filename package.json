@@ -1,0 +1,9 @@
+{
+  "name": "hands3dlab-voxkit-workspace",
+  "private": true,
+  "description": "Workspace convenience scripts for the Hands3DLab-VoxKit Electron client.",
+  "scripts": {
+    "start": "npm --prefix electron start",
+    "build": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --parallel 2"
+  }
+}

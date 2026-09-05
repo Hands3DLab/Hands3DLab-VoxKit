@@ -1,0 +1,13 @@
+# Dependencies and generated build output
+node_modules/
+electron/node_modules/
+build/
+build-*/
+package/
+package-*/
+
+# Local release archives
+*.zip
+
+# macOS metadata
+.DS_Store

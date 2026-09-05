@@ -228,7 +228,7 @@ VoxelGrid voxelizeTrianglesD3D11(
   constexpr std::uint32_t threadsPerGroup = 64;
   constexpr std::uint32_t maxTrianglesPerDispatch = 65535u * threadsPerGroup;
   for (std::uint32_t offset = 0; offset < triangles.size(); offset += maxTrianglesPerDispatch) {
-    const std::uint32_t count = (std::min)<std::uint32_t>(maxTrianglesPerDispatch,
+    const std::uint32_t count = (std::min<std::uint32_t>)(maxTrianglesPerDispatch,
       static_cast<std::uint32_t>(triangles.size() - offset));
     const Params params{static_cast<std::uint32_t>(resolution), static_cast<std::uint32_t>(triangles.size()),
                         static_cast<float>(voxelSize), offset,

@@ -8,10 +8,14 @@
 </head>
 <body>
 <div class="app-shell" id="appShell">
+  <header class="topbar">
+    <span class="topbar-title">模型体素化</span>
+    <button class="icon-button topbar-collapse" id="sidebarToggle" aria-label="收起边栏" title="收起边栏"><i class="ph-thin ph-sidebar" aria-hidden="true"></i></button>
+    <button class="language-toggle" id="languageToggle" type="button" aria-label="切换到 English" title="切换语言">EN</button>
+    <button class="icon-button topbar-arrow" id="topAbout" title="关于"><i class="ph-thin ph-arrow-right" aria-hidden="true"></i></button>
+  </header>
   <aside class="sidebar">
-    <div class="sidebar-top">
-      <button class="icon-button sidebar-toggle" id="sidebarToggle" aria-label="收起边栏" title="收起边栏"><i class="ph-thin ph-sidebar" aria-hidden="true"></i></button>
-    </div>
+    <div class="sidebar-top"></div>
     <p class="nav-label">输入格式</p>
     <nav class="format-nav" aria-label="输入格式">
       <button class="format-item active" data-format="obj" title="OBJ 模型"><span class="format-badge obj"><i class="ph-thin ph-cube" aria-hidden="true"></i></span><span class="format-label">OBJ</span></button>
@@ -24,12 +28,6 @@
     </div>
   </aside>
   <main class="workspace">
-    <header class="topbar">
-      <button class="icon-button floating-toggle" id="floatingToggle" aria-label="展开边栏" title="展开边栏"><i class="ph-thin ph-sidebar" aria-hidden="true"></i></button>
-      <span class="topbar-title">模型体素化</span>
-      <button class="language-toggle" id="languageToggle" type="button" aria-label="切换到 English" title="切换语言">EN</button>
-      <button class="icon-button topbar-arrow" id="topAbout" title="关于"><i class="ph-thin ph-arrow-right" aria-hidden="true"></i></button>
-    </header>
     <section class="workflow" id="workflowView">
       <div class="workflow-intro"><div class="workflow-icon-badge"><i class="ph-thin ph-cube" aria-hidden="true"></i><span>VOX</span></div><div class="workflow-title-wrap"><h1 class="workflow-title">模型体素化</h1><p id="pageSubtitle">将 OBJ 网格模型转换为可打印的体素模型。</p></div></div>
       <div class="step-switcher"><button class="step-button active" data-step="1"><span class="step-num">①</span><span>文件设置</span><i class="ph-thin ph-caret-right step-sep" aria-hidden="true"></i></button><button class="step-button" data-step="2"><span class="step-num">②</span><span id="parameterStepLabel">OBJ 参数</span></button></div>

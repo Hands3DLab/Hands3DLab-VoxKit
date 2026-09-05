@@ -260,6 +260,9 @@
   }
 
   function applyVoxelCapabilities(capabilities = {}) {
+    if (capabilities.platform) {
+      document.documentElement.dataset.platform = capabilities.platform;
+    }
     state.triangleVoxelization = capabilities.triangleVoxelization === true;
     const triangleButton = $('parameterStep').querySelector('[data-setting="voxelMode"] button[data-value="triangle"]');
     if (!triangleButton) return;
@@ -827,7 +830,6 @@
     $('sidebarToggle').title = localizeText(collapsed ? '展开边栏' : '收起边栏');
     $('sidebarToggle').setAttribute('aria-label', localizeText(collapsed ? '展开边栏' : '收起边栏'));
   });
-  $('floatingToggle').addEventListener('click', () => $('appShell').classList.remove('sidebar-collapsed'));
 
   const dropSurface = $('inputPicker');
   ['dragenter', 'dragover'].forEach((eventName) => dropSurface.addEventListener(eventName, (event) => { event.preventDefault(); dropSurface.classList.add('dragover'); }));

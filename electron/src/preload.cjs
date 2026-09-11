@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('voxkit', {
   voxelize: (settings) => ipcRenderer.invoke('voxelize:start', settings),
   exportForSnapmakerU1: (settings) => ipcRenderer.invoke('print-export:snapmaker-u1', settings),
   exportModel: (settings) => ipcRenderer.invoke('model:export', settings),
+  exportSourceModel: (settings) => ipcRenderer.invoke('model:export-source', settings),
   openInSlicer: (filePath, locale) => ipcRenderer.invoke('print-export:open-slicer', filePath, locale),
   listPrinters: (locale) => ipcRenderer.invoke('printers:list', locale),
   inspectPrintModel: (settings) => ipcRenderer.invoke('print:inspect', settings),

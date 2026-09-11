@@ -461,6 +461,70 @@ VoxelGrid voxelizeMesh(const std::string& path, int resolution, VoxelizationMode
   return grid;
 }
 
+SourceMesh readSourceMesh(const std::string& path)
+{
+  SourceMesh mesh;
+  std::vector<FloatColor> colors;
+  bool hasColors = false;
+  readMesh(path, mesh.positions, mesh.triangles, colors, hasColors);
+  return mesh;
+}
+
+void writeSourceObj(const SourceMesh& mesh, const std::string& path)
+{
+  std::ofstream out(path);
+  if (!out) throw std::runtime_error("failed to open OBJ output: " + path);
+  out << "# Hands3DLab VoxKit source mesh conversion\n";
+  for (const auto& p : mesh.positions) out << "v " << p[0] << ' ' << p[1] << ' ' << p[2] << "\n";
+  for (const auto& t : mesh.triangles) out << "f " << t[0] + 1 << ' ' << t[1] + 1 << ' ' << t[2] + 1 << "\n";
+  if (!out) throw std::runtime_error("failed while writing OBJ output");
+}
+
+void writeSourceStl(const SourceMesh& mesh, const std::string& path)
+{
+  std::ofstream out(path, std::ios::binary);
+  if (!out) throw std::runtime_error("failed to open STL output: " + path);
+  std::array<char, 80> header{};
+  const std::string label = "Hands3DLab VoxKit source mesh";
+  std::copy(label.begin(), label.end(), header.begin());
+  out.write(header.data(), 80);
+  const auto count = static_cast<std::uint32_t>(mesh.triangles.size());
+  out.write(reinterpret_cast<const char*>(&count), 4);
+  for (const auto& t : mesh.triangles) {
+    const Vec3& a = mesh.positions[t[0]], b = mesh.positions[t[1]], c = mesh.positions[t[2]];
+    const Vec3 rawNormal = cross(sub(b, a), sub(c, a));
+    const double normalLength = std::sqrt(lengthSquared(rawNormal));
+    const Vec3 normal = normalLength > 1e-18
+      ? Vec3{rawNormal[0] / normalLength, rawNormal[1] / normalLength, rawNormal[2] / normalLength}
+      : Vec3{0.0, 0.0, 0.0};
+    const auto writeFloat = [&out](double value) { const float v = static_cast<float>(value); out.write(reinterpret_cast<const char*>(&v), 4); };
+    for (double v : normal) writeFloat(v);
+    for (const Vec3& p : {a, b, c}) for (double v : p) writeFloat(v);
+    const std::uint16_t attribute = 0;
+    out.write(reinterpret_cast<const char*>(&attribute), 2);
+  }
+  if (!out) throw std::runtime_error("failed while writing STL output");
+}
+
+void writeSourceGlb(const SourceMesh& mesh, const std::string& path)
+{
+  std::vector<float> positions;
+  positions.reserve(mesh.triangles.size() * 9);
+  for (const auto& t : mesh.triangles) for (auto index : t) for (double v : mesh.positions[index]) positions.push_back(static_cast<float>(v));
+  std::vector<std::uint8_t> bin(positions.size() * sizeof(float));
+  std::memcpy(bin.data(), positions.data(), bin.size());
+  while (bin.size() % 4) bin.push_back(0);
+  std::string json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"mode\":4}]}],\"buffers\":[{\"byteLength\":" + std::to_string(bin.size()) + "}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":" + std::to_string(bin.size()) + "}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":" + std::to_string(positions.size() / 3) + ",\"type\":\"VEC3\"}]}";
+  while (json.size() % 4) json.push_back(' ');
+  std::ofstream out(path, std::ios::binary);
+  if (!out) throw std::runtime_error("failed to open GLB output: " + path);
+  const auto u32 = [&out](std::uint32_t v) { out.write(reinterpret_cast<const char*>(&v), 4); };
+  u32(0x46546C67); u32(2); u32(static_cast<std::uint32_t>(12 + 8 + json.size() + 8 + bin.size()));
+  u32(static_cast<std::uint32_t>(json.size())); u32(0x4E4F534A); out.write(json.data(), json.size());
+  u32(static_cast<std::uint32_t>(bin.size())); u32(0x004E4942); out.write(reinterpret_cast<const char*>(bin.data()), bin.size());
+  if (!out) throw std::runtime_error("failed while writing GLB output");
+}
+
 void writeBinvox(const VoxelGrid& grid, const std::string& path)
 {
   std::ofstream out(path, std::ios::binary);
@@ -1068,4 +1132,21 @@ void write3mf(const VoxelGrid& grid, const std::string& path,
   writeStoredZip(path, {{"[Content_Types].xml", contentTypes},
                         {"_rels/.rels", relationships},
                         {"3D/3dmodel.model", model.str()}});
+}
+
+void writeSource3mf(const SourceMesh& mesh, const std::string& path)
+{
+  if (mesh.triangles.empty()) throw std::runtime_error("cannot export an empty 3MF mesh");
+  std::ostringstream model;
+  model.imbue(std::locale::classic());
+  model << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        << "<model unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n"
+        << "<resources><object id=\"1\" type=\"model\"><mesh><vertices>\n";
+  for (const auto& point : mesh.positions) model << "<vertex x=\"" << point[0] << "\" y=\"" << point[1] << "\" z=\"" << point[2] << "\"/>\n";
+  model << "</vertices><triangles>\n";
+  for (const auto& triangle : mesh.triangles) model << "<triangle v1=\"" << triangle[0] << "\" v2=\"" << triangle[1] << "\" v3=\"" << triangle[2] << "\"/>\n";
+  model << "</triangles></mesh></object></resources><build><item objectid=\"1\"/></build></model>\n";
+  const std::string contentTypes = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"model\" ContentType=\"application/vnd.ms-package.3dmanufacturing-3dmodel+xml\"/></Types>";
+  const std::string relationships = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Target=\"/3D/3dmodel.model\" Id=\"rel0\" Type=\"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel\"/></Relationships>";
+  writeStoredZip(path, {{"[Content_Types].xml", contentTypes}, {"_rels/.rels", relationships}, {"3D/3dmodel.model", model.str()}});
 }

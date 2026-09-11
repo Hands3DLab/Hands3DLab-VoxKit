@@ -160,6 +160,7 @@ html[data-platform="darwin"] .topbar { padding-left: 84px; }
 .primary-action, .secondary-action, .result-file button, .social-links a { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
 .primary-action i, .secondary-action i, .result-file button i { font-size: 12px; }
 .primary-action { margin-left: auto; border: 0; background: var(--accent); color: white; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.actionbar-export { margin-left: 0; }
 .primary-action:hover { background: #087ff5; box-shadow: 0 3px 9px rgba(0,122,255,.22); }
 .primary-action:active, .secondary-action:active, .result-file button:active { transform: scale(.97); }
 .cancel-button { margin-left: auto; border: 1px solid #e2bebe; background: #fff7f7; color: var(--danger); }

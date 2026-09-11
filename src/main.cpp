@@ -11,7 +11,8 @@ void usage()
 {
   std::cerr << "Usage: voxkit <input.glb|input.obj|input.stl> [-r resolution]\n"
             << "              [--voxel-mode pixel|triangle|quad] [--split-parts] [-o output.binvox]\n"
-            << "       voxkit --export-<obj|glb|stl|3mf> <input.binvox> -o output.<format>\n";
+            << "       voxkit --export-<obj|glb|stl|3mf> <input.binvox> -o output.<format>\n"
+            << "       voxkit --convert-<obj|glb|stl|3mf> <input.mesh> -o output.<format>\n";
 }
 
 std::string defaultOutput(const std::string& input)
@@ -53,6 +54,7 @@ int main(int argc, char** argv)
     bool splitParts = false;
     VoxelizationMode voxelMode = VoxelizationMode::Pixel;
     std::string exportFormat;
+    std::string convertFormat;
 
     for (int i = 1; i < argc; ++i) {
       std::string arg = argv[i];
@@ -72,6 +74,8 @@ int main(int argc, char** argv)
         output = argv[++i];
       } else if (arg == "--export-stl" || arg == "--export-obj" || arg == "--export-glb" || arg == "--export-3mf") {
         exportFormat = arg.substr(9);
+      } else if (arg == "--convert-stl" || arg == "--convert-obj" || arg == "--convert-glb" || arg == "--convert-3mf") {
+        convertFormat = arg.substr(10);
       } else if (input.empty()) {
         input = arg;
       } else {
@@ -82,6 +86,23 @@ int main(int argc, char** argv)
     if (input.empty()) {
       usage();
       return 2;
+    }
+    if (!convertFormat.empty()) {
+      if (output.empty()) {
+        std::filesystem::path defaultPath(input);
+        defaultPath.replace_extension("." + convertFormat);
+        output = defaultPath.string();
+      }
+      progress(5, "loading-mesh");
+      const SourceMesh mesh = readSourceMesh(input);
+      progress(85, "writing-" + convertFormat);
+      if (convertFormat == "stl") writeSourceStl(mesh, output);
+      else if (convertFormat == "obj") writeSourceObj(mesh, output);
+      else if (convertFormat == "glb") writeSourceGlb(mesh, output);
+      else writeSource3mf(mesh, output);
+      progress(100, "done");
+      std::cout << "VOXKIT_RESULT input=\"" << input << "\" output=\"" << output << "\" triangles=" << mesh.triangles.size() << std::endl;
+      return 0;
     }
     if (!exportFormat.empty()) {
       if (output.empty()) {

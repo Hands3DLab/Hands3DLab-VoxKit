@@ -43,6 +43,11 @@ struct VoxelGrid {
   bool hasColors() const { return !colors.empty() && colors.size() == data.size(); }
 };
 
+struct SourceMesh {
+  std::vector<std::array<double, 3>> positions;
+  std::vector<std::array<std::uint32_t, 3>> triangles;
+};
+
 class Voxelizer {
 public:
   Voxelizer() = default;
@@ -55,6 +60,11 @@ public:
 VoxelGrid voxelizeMesh(const std::string& path, int resolution = 128,
                        VoxelizationMode mode = VoxelizationMode::Pixel,
                        std::string* backend = nullptr);
+SourceMesh readSourceMesh(const std::string& path);
+void writeSourceStl(const SourceMesh& mesh, const std::string& path);
+void writeSourceObj(const SourceMesh& mesh, const std::string& path);
+void writeSourceGlb(const SourceMesh& mesh, const std::string& path);
+void writeSource3mf(const SourceMesh& mesh, const std::string& path);
 #if defined(VOXKIT_ENABLE_METAL)
 VoxelGrid voxelizeTrianglesMetal(
   const std::vector<std::array<double, 3>>& positions,

@@ -9,6 +9,11 @@ electron/.protected/
 
 # Local release archives
 *.zip
+electron/dist/
+*.blockmap
+electron-builder*.yml
+builder-debug.yml
+builder-effective-config.yaml
 
 # macOS metadata
 .DS_Store

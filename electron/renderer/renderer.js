@@ -10,7 +10,7 @@
     '支持 STL 格式': 'STL format supported', '体素导出格式': 'Voxel export format',
     'STL 为默认格式；3MF 可保留颜色': 'STL is default; 3MF preserves colors',
     '输出文件保存位置': 'Output file location', '选择位置': 'Choose location', '更改位置': 'Change location',
-    '选择 STL 文件保存位置': 'Choose an STL output location', '下一步': 'Next', '开始转换': 'Start conversion',
+    '选择 STL 文件保存位置': 'Choose an STL output location', '下一步': 'Next', '开始转换': 'Start conversion', '开始体素处理': 'Start voxel processing',
     'OBJ 体素参数': 'OBJ voxel parameters', 'GLB 转换参数': 'GLB conversion parameters', 'STL 转换参数': 'STL conversion parameters',
     '体素分辨率': 'Voxel resolution', '边界盒最长边': 'Longest bounding-box edge', '体素化方案': 'Voxelization method',
     '三角面方案使用 GPU': 'Triangle mode uses the GPU', '三角面方案需要启用 GPU 的构建（macOS Metal 或 Windows Direct3D 11）。': 'Triangle mode requires a GPU-enabled build (Metal on macOS or Direct3D 11 on Windows).', '像素化': 'Pixel', '三角面 GPU': 'Triangle GPU', '四边面': 'Quad',
@@ -23,7 +23,7 @@
     '欢迎关注': 'Stay connected', '更新日志': 'Changelog', '版本记录': 'Version history', '离线 3D 模型体素化工具': 'Offline 3D model voxelizer',
     '体素报告': 'Voxel report', '在 Finder 中显示': 'Reveal in Finder', '查看处理日志': 'View processing log',
     '转换完成': 'Conversion complete', '体素模型已就绪': 'Voxel model is ready', '开始新的转换': 'New conversion',
-    '另存格式': 'Export as', '导出 OBJ': 'Export OBJ', '导出 GLB': 'Export GLB', '导出 STL': 'Export STL', '导出 3MF': 'Export 3MF',
+    '另存格式': 'Export as', '导出其它格式': 'Export other formats', '导出 OBJ': 'Export OBJ', '导出 GLB': 'Export GLB', '导出 STL': 'Export STL', '导出 3MF': 'Export 3MF',
     '通用网格模型': 'General mesh model', '二进制 glTF 模型': 'Binary glTF model', '单色 3D 打印网格': 'Monochrome 3D-print mesh',
     '保留体素颜色': 'Preserve voxel colors', '开始 3D 打印': 'Start 3D printing', '刷新': 'Refresh', '打开记录文件夹': 'Open history folder',
     '关闭': 'Close', '打印机': 'Printer', '确认发送打印': 'Send to printer', '取消': 'Cancel', '成型比例': 'Print scale',
@@ -206,11 +206,14 @@
     const action = $('primaryAction');
     action.disabled = state.converting;
     if (state.step === 1) {
+      $('actionbarExportWrap').classList.add('hidden');
       action.innerHTML = `${escapeHtml(localizeText('下一步'))} <i class="ph-thin ph-arrow-right" aria-hidden="true"></i>`;
       action.title = localizeText(ready ? '进入参数设置' : '请先选择源模型和输出位置');
     } else {
-      action.innerHTML = `${escapeHtml(localizeText('开始转换'))} <i class="ph-thin ph-play" aria-hidden="true"></i>`;
-      action.title = localizeText(ready ? '开始转换' : '请先选择源模型和输出位置');
+      $('actionbarExportWrap').classList.toggle('hidden', state.converting);
+      $('actionbarExport').disabled = !state.inputPath || state.converting || state.exportingPrint;
+      action.innerHTML = `${escapeHtml(localizeText('开始体素处理'))} <i class="ph-thin ph-play" aria-hidden="true"></i>`;
+      action.title = localizeText(ready ? '开始体素处理' : '请先选择源模型和输出位置');
     }
   }
 
@@ -403,6 +406,44 @@
     $('dockStartPrint').disabled = busy || state.converting;
     $('dockExport').disabled = busy || state.exportingPrint;
     $('dockNewConversion').disabled = busy;
+    $('actionbarExport').disabled = busy || state.converting || !state.inputPath;
+  }
+
+  async function exportSourceModel(format) {
+    if (!state.inputPath || state.exportingPrint) return;
+    const labels = { obj: 'OBJ', glb: 'GLB', stl: 'STL', '3mf': '3MF' };
+    const label = labels[format];
+    let busy = false;
+    try {
+      if (!label) throw new Error(t('error.exportFormat', { format }));
+      if (typeof window.voxkit?.pickModelOutput !== 'function' || typeof window.voxkit?.exportSourceModel !== 'function') throw new Error('导出服务尚未加载，请完全退出并重新启动应用。');
+      const outputPath = await window.voxkit.pickModelOutput({ format, defaultPath: `${withoutExtension(state.inputPath)}.${format}`, locale: language });
+      if (!outputPath) return;
+      state.exportingPrint = true;
+      busy = true;
+      setDockBusy(true);
+      $('printStatus').classList.remove('hidden', 'error');
+      setText('printStatusTitle', t('export.running', { format: label }));
+      setText('printStatusDetail', '正在转换源模型，请稍候');
+      $('printProgress').classList.remove('hidden');
+      showPrintProgress({ progress: 0, message: '正在读取源模型' });
+      const exported = await window.voxkit.exportSourceModel({ format, inputPath: state.inputPath, outputPath, locale: language });
+      state.printOutputPath = exported.outputPath;
+      setText('printStatusTitle', t('export.generated', { format: label }));
+      setText('printStatusDetail', `${basename(exported.outputPath)} · ${formatBytes(exported.bytes)}`);
+      hidePrintProgress();
+      appendLog(t('export.log', { format: label, path: exported.outputPath }));
+      if ($('recordsDialog').open) await loadExportHistory();
+    } catch (error) {
+      const message = error?.message || String(error);
+      setText('printStatusTitle', '导出失败');
+      setText('printStatusDetail', message);
+      $('printStatus').classList.add('error');
+      appendLog(t('error.export', { message }));
+    } finally {
+      hidePrintProgress();
+      if (busy) { state.exportingPrint = false; setDockBusy(false); }
+    }
   }
 
   async function exportModel(format) {
@@ -679,7 +720,7 @@
   }
 
   async function startConversion() {
-    if (!state.inputPath || !state.outputPath) { appendLog('请先选择源模型与输出位置'); return; }
+    if (!state.inputPath || !state.outputPath) { appendLog('请先选择源模型与输出位置'); return false; }
     setConverting(true);
     state.progress = 0;
     state.logs = [];
@@ -688,6 +729,7 @@
     try {
       const result = await window.voxkit.voxelize({ ...collectSettings(), locale: language });
       showResult(result);
+      return Boolean(result.validationPassed && !result.cancelled && !result.error);
     } catch (error) {
       const message = error?.message || String(error);
       appendLog(t('error.conversion', { message }));
@@ -696,6 +738,7 @@
       setText('resultMessage', message);
       $('resultSymbol').innerHTML = '<i class="ph-thin ph-x" aria-hidden="true"></i>';
       $('resultHeading').classList.add('error');
+      return false;
     } finally {
       setConverting(false);
       setDockBusy(false);
@@ -740,24 +783,36 @@
   $('primaryAction').addEventListener('click', () => state.step === 1 ? setStep(2) : startConversion());
   $('cancelConversion').addEventListener('click', async () => { await window.voxkit.cancel(); appendLog('正在取消转换…'); });
   $('dockNewConversion').addEventListener('click', resetForNewConversion);
-  $('dockExport').addEventListener('click', () => {
-    const menu = $('exportMenu');
+  function toggleExportMenu(buttonId, menuId) {
+    const button = $(buttonId);
+    const menu = $(menuId);
     const open = menu.classList.toggle('hidden');
-    $('dockExport').setAttribute('aria-expanded', String(!open));
-  });
-  $$('[data-export-format]').forEach((item) => item.addEventListener('click', () => {
+    button.setAttribute('aria-expanded', String(!open));
+  }
+  function closeExportMenus() {
     $('exportMenu').classList.add('hidden');
     $('dockExport').setAttribute('aria-expanded', 'false');
+    $('actionbarExportMenu').classList.add('hidden');
+    $('actionbarExport').setAttribute('aria-expanded', 'false');
+  }
+  $('dockExport').addEventListener('click', () => toggleExportMenu('dockExport', 'exportMenu'));
+  $('actionbarExport').addEventListener('click', () => toggleExportMenu('actionbarExport', 'actionbarExportMenu'));
+  $$('#exportMenu [data-export-format]').forEach((item) => item.addEventListener('click', () => {
+    closeExportMenus();
     exportModel(item.dataset.exportFormat);
+  }));
+  $$('#actionbarExportMenu [data-export-format]').forEach((item) => item.addEventListener('click', async () => {
+    const format = item.dataset.exportFormat;
+    closeExportMenus();
+    await exportSourceModel(format);
   }));
   document.addEventListener('click', (event) => {
     if (!event.target.closest('.export-menu-wrap')) {
-      $('exportMenu').classList.add('hidden');
-      $('dockExport').setAttribute('aria-expanded', 'false');
+      closeExportMenus();
     }
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') $('exportMenu').classList.add('hidden');
+    if (event.key === 'Escape') closeExportMenus();
   });
   $('dockStartPrint').addEventListener('click', openPrintDialog);
   $('revealOutput').addEventListener('click', () => window.voxkit.revealOutput(state.result?.outputPath));

@@ -22,6 +22,10 @@
       {
         "from": ".protected/voxkit-config.enc.json",
         "to": "voxkit-config.enc.json"
+      },
+      {
+        "from": "../build/voxkit",
+        "to": "voxkit"
       }
     ]
   },

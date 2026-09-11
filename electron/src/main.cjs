@@ -359,6 +359,26 @@ async function exportModel(settings) {
   addExportRecord(exported);
   return exported;
 }
+async function exportSourceModel(settings) {
+  const locale = settings?.locale;
+  if (activeProcess) throw localizedError(locale, '已有任务正在运行，请稍后再试。', 'Another task is already running. Please try again later.');
+  const format = String(settings?.format || '').toLowerCase();
+  if (!['obj', 'glb', 'stl', '3mf'].includes(format) || typeof settings?.inputPath !== 'string' || typeof settings?.outputPath !== 'string') {
+    throw localizedError(locale, '源模型导出参数无效。', 'Invalid source model export parameters.');
+  }
+  if (!fs.existsSync(settings.inputPath)) throw localizedError(locale, '找不到源模型文件。', 'The source model file could not be found.');
+  if (path.resolve(settings.inputPath) === path.resolve(settings.outputPath)) throw localizedError(locale, '输出文件不能覆盖源模型。', 'The output file cannot overwrite the source model.');
+  if (path.extname(settings.outputPath).toLowerCase() !== `.${format}`) throw localizedError(locale, `输出文件扩展名必须为 .${format}。`, `The output filename extension must be .${format}.`);
+  const binary = locateVoxkit();
+  if (!binary) throw localizedError(locale, '未找到模型转换引擎，请检查应用安装是否完整。', 'Model conversion engine not found. Please check that the application is installed correctly.');
+  const result = await runVoxelizer(binary, [`--convert-${format}`, settings.inputPath, '-o', settings.outputPath], 'model-export:progress', (value) => value, locale);
+  if (result.code !== 0) throw new Error(result.stderr.trim() || localized(locale, `源模型导出失败（退出码 ${result.code}）`, `Source model export failed (exit code ${result.code})`));
+  const stats = fs.statSync(settings.outputPath);
+  if (!stats.isFile() || stats.size < 4) throw localizedError(locale, `导出的 ${format.toUpperCase()} 文件无效。`, `The exported ${format.toUpperCase()} file is invalid.`);
+  const exported = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`, exportedAt: new Date().toISOString(), operation: 'source-export', format: format.toUpperCase(), sourcePath: settings.inputPath, originalSourcePath: settings.inputPath, outputPath: settings.outputPath, bytes: stats.size, conversion: null };
+  addExportRecord(exported);
+  return exported;
+}
 function findPrinter(printerId) { return PRINTERS.find((printer) => printer.id === printerId); }
 function normalizeConversion(conversion) {
   if (!conversion || typeof conversion !== 'object') return null;
@@ -598,6 +618,7 @@ app.whenReady().then(() => {
   ipcMain.handle('voxelize:start', (_event, settings) => voxelize(settings));
   ipcMain.handle('print-export:snapmaker-u1', (_event, settings) => recordExportFailure('print-export', settings, () => exportForSnapmakerU1(settings)));
   ipcMain.handle('model:export', (_event, settings) => recordExportFailure('model-export', settings, () => exportModel(settings)));
+  ipcMain.handle('model:export-source', (_event, settings) => recordExportFailure('source-export', settings, () => exportSourceModel(settings)));
   ipcMain.handle('printers:list', () => PRINTERS.map(({ id, name, enabled, buildVolume }) => ({ id, name, enabled, buildVolume })));
   ipcMain.handle('print:inspect', (_event, settings) => inspectPrintModel(settings));
   ipcMain.handle('print:send', (_event, settings) => sendToPrinter(settings));

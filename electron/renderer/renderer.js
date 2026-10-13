@@ -8,7 +8,7 @@
     '拖入或选择源模型': 'Drop or choose a source model', '选择…': 'Choose…', '选择文件': 'Choose file',
     '更改文件': 'Change file', '支持 OBJ 格式': 'OBJ format supported', '支持 GLB 格式': 'GLB format supported',
     '支持 STL 格式': 'STL format supported', '体素导出格式': 'Voxel export format',
-    'STL 为默认格式；3MF 可保留颜色': 'STL is default; 3MF preserves colors',
+    '分割会先按源 STL 零件分别体素化；STL 仍可直接输出': 'Split mode voxelizes source STL parts separately; STL output remains available',
     '输出文件保存位置': 'Output file location', '选择位置': 'Choose location', '更改位置': 'Change location',
     '选择 STL 文件保存位置': 'Choose an STL output location', '下一步': 'Next', '开始转换': 'Start conversion', '开始体素处理': 'Start voxel processing',
     'OBJ 体素参数': 'OBJ voxel parameters', 'GLB 转换参数': 'GLB conversion parameters', 'STL 转换参数': 'STL conversion parameters',
@@ -18,7 +18,9 @@
     '填充模式': 'Fill mode', '输出体素内部': 'Fill voxel interior', '表面': 'Surface', '实体填充': 'Solid fill',
     '体素化质量': 'Voxelization quality', '速度与细节平衡': 'Balance speed and detail', '快速': 'Fast', '均衡': 'Balanced', '高质量': 'Quality',
     '模型预览': 'Model preview', '完成后生成': 'Generate after completion', '生成预览': 'Generate preview', '仅输出数据': 'Data only',
-    '是否拆分零件': 'Split parts', '识别体素中相互独立的零件': 'Identify independent voxel parts', '是': 'Yes', '否': 'No',
+    '是否拆分零件': 'Split parts', '先识别源 STL 子零件，再分别体素化；输出格式保持你的选择': 'Identify source STL parts first, then voxelize separately; keep the selected output format', '是': 'Yes', '否': 'No',
+    '已开启零件分割，输出格式已切换为 3MF，以保留源零件对象。': 'Part splitting is enabled. Output switched to 3MF to preserve the source part objects.',
+    '源模型子零件': 'Source model parts',
     '正在处理': 'Processing', '取消转换': 'Cancel conversion', '返回': 'Back', '账号与联系': 'Account & contact',
     '欢迎关注': 'Stay connected', '更新日志': 'Changelog', '版本记录': 'Version history', '离线 3D 模型体素化工具': 'Offline 3D model voxelizer',
     '体素报告': 'Voxel report', '在 Finder 中显示': 'Reveal in Finder', '查看处理日志': 'View processing log',
@@ -53,6 +55,8 @@
     '查看详情': 'View details', '打开文件': 'Open file', '从记录中移除': 'Remove from history', '鼠标移入查看二维码': 'Hover to view QR code',
     '打开主页': 'Open profile', '访问官网': 'Visit website', '官网': 'Website', '微信': 'WeChat', '视频号': 'WeChat Channels', '抖音': 'Douyin', '小红书': 'RED', 'B站': 'Bilibili',
     '准备就绪': 'Ready', '请选择源模型与输出位置': 'Choose a source model and output location', '进入参数设置': 'Continue to parameters', '请先选择源模型和输出位置': 'Choose a source model and output location first',
+    '像素细节补偿': 'Pixel detail compensation', '打印缩小时，增厚像素模型中低于目标值的细节': 'Thicken pixel-model details below the target width when printing smaller',
+    '打印件目标最小厚度': 'Minimum printed feature width', '按 0.4 mm 喷嘴的两道线宽估算；只增强已保留的窄特征，已在体素化时消失的细节无法恢复。': 'Estimated as two line widths for a 0.4 mm nozzle. This thickens narrow features that survived voxelization; details already lost during voxelization cannot be restored.',
     '体素方案': 'Voxel method', '方块像素': 'Block voxels', '连续三角面': 'Continuous triangles', '连续四边面': 'Continuous quads', '失败': 'Failed',
     '转换未生成有效文件': 'No valid output was generated', '正在准备模型': 'Preparing model', '正在构建打印网格，请稍候': 'Building the print mesh. Please wait.',
     '暂无导出记录': 'No export history', '生成打印文件或将原始模型发送到打印机后，记录会显示在这里。': 'Records appear here after you export a print file or send a model to a printer.',
@@ -84,6 +88,8 @@
     'export.log': '已导出 {format}：{path}', 'printer.volume': '{name} · {volume} mm 成型空间', 'printer.coming': '{name}（即将支持）',
     'printer.modelVoxelized': '{name}（体素化）', 'printer.buildVolume': '成型空间 {volume} mm', 'ratio.fit': '等比缩放至成型空间的 {percent}%',
     'print.reading': '正在读取 {format} 体素结果', 'print.sending': '正在发送到 {name}', 'print.scaling': '正在按 {percent}% 成型比例准备体素模型',
+    'print.featureWidth': '目标打印厚度 {width} mm；按最终成型比例增厚已保留的窄细节。体素化时已消失的细节无法恢复。',
+    'print.featureApplied': '细节补偿 {width} mm',
     'print.sentLog': '已将体素模型发送到 {printer}（{slicer}）：{path}', 'print.fit': '匹配 {size} mm（{percent}%）', 'print.sent': '已发送到 {name}',
     'history.count': '{count} 条记录', 'history.sent': '已发送到 {name}', 'history.exported': '已导出 {name}',
     'detail.sent': '该记录由「开始 3D 打印」发送到 {name}', 'detail.exported': '该记录由「导出」生成 {name}',
@@ -100,6 +106,8 @@
     'export.log': 'Exported {format}: {path}', 'printer.volume': '{name} · {volume} mm build volume', 'printer.coming': '{name} (coming soon)',
     'printer.modelVoxelized': '{name} (voxelized)', 'printer.buildVolume': 'Build volume {volume} mm', 'ratio.fit': 'Scale proportionally to {percent}% of the build volume',
     'print.reading': 'Reading {format} voxel result', 'print.sending': 'Sending to {name}', 'print.scaling': 'Preparing the voxel model at {percent}% print scale',
+    'print.featureWidth': 'Target printed width: {width} mm. Narrow details retained by voxelization will be thickened for the final scale; details already lost cannot be restored.',
+    'print.featureApplied': 'detail target {width} mm',
     'print.sentLog': 'Sent voxel model to {printer} ({slicer}): {path}', 'print.fit': 'Fit to {size} mm ({percent}%)', 'print.sent': 'Sent to {name}',
     'history.count': '{count} records', 'history.sent': 'Sent to {name}', 'history.exported': 'Exported {name}',
     'detail.sent': 'Sent from “Start 3D Printing” to {name}', 'detail.exported': 'Generated by “Export” as {name}',
@@ -194,6 +202,10 @@
     setText('inputName', state.inputPath ? basename(state.inputPath) : '拖入或选择源模型');
     setText('inputAction', state.inputPath ? '更改文件' : '选择文件');
     setSegmentedValue($('outputFormat'), state.outputFormat);
+    $$('button', $('outputFormat')).forEach((button) => {
+      button.disabled = state.converting;
+      button.title = '';
+    });
     setText('outputPath', state.outputPath || t('file.outputLocation', { format: state.outputFormat.toUpperCase() }));
     setText('outputAction', state.outputPath ? '更改位置' : '选择位置');
     $('inputPicker').classList.toggle('has-file', Boolean(state.inputPath));
@@ -307,7 +319,9 @@
     $('primaryAction').classList.toggle('hidden', converting);
     $('inputPicker').disabled = converting;
     $('outputPicker').disabled = converting;
-    $$('button', $('outputFormat')).forEach((button) => { button.disabled = converting; });
+    $$('button', $('outputFormat')).forEach((button) => {
+      button.disabled = converting;
+    });
     $$('.format-item').forEach((button) => { button.disabled = converting; });
     applyVoxelCapabilities({ triangleVoxelization: state.triangleVoxelization });
     $$('.step-button').forEach((button) => { button.disabled = converting || (Number(button.dataset.step) === 2 && (!state.inputPath || !state.outputPath)); });
@@ -353,6 +367,7 @@
       reportCell('体素方案', report.voxelMode || state.voxelMode),
       reportCell('表面拓扑', ({ blocks: '方块像素', triangles: '连续三角面', quads: '连续四边面' })[report.topology] || report.topology),
       reportCell('计算后端', report.backend),
+      ...(Number(report.components) > 0 ? [reportCell('源模型子零件', report.components)] : []),
       reportCell('输出格式', outputFormat),
       reportCell('输入文件', basename(result.sourcePath || state.inputPath)),
       reportCell('输出文件', basename(result.outputPath)),
@@ -373,6 +388,8 @@
       voxelMode: report.voxelMode || state.voxelMode,
       topology: report.topology,
       backend: report.backend,
+      components: report.components,
+      splitParts: report.splitParts === 'true',
       validationPassed: Boolean(result.validationPassed),
       log: state.logs.join('\n')
     } : null;
@@ -531,6 +548,22 @@
     setText('ratioModelSize', printer.buildVolume ? t('printer.buildVolume', { volume: printer.buildVolume.join(' × ') }) : '由切片软件决定模型尺寸');
     $('ratioSlider').value = '3';
     updateRatioPreview();
+    syncFeatureCompensationPanel();
+  }
+
+  function syncFeatureCompensationPanel() {
+    const conversion = state.conversion || {};
+    const supported = conversion.voxelMode === 'pixel' && Boolean(conversion.voxelDataPath);
+    $('featureCompensationPanel').classList.toggle('hidden', !supported);
+    $('minimumFeatureWidthMm').disabled = !supported || !$('featureCompensation').checked;
+    updateFeatureCompensationHint();
+  }
+
+  function updateFeatureCompensationHint() {
+    const width = Number($('minimumFeatureWidthMm').value);
+    setText('featureCompensationHint', t('print.featureWidth', {
+      width: Number.isFinite(width) ? width.toFixed(1) : '0.8'
+    }));
   }
 
   function openPrintDialog() {
@@ -581,6 +614,7 @@
     setText('ratioPreviewHint', option.value == null
       ? '保持模型原始尺寸直接发送到切片软件'
       : t('ratio.fit', { percent: Math.round(option.value * 100) }));
+    updateFeatureCompensationHint();
   }
 
   async function sendToPrinter() {
@@ -596,6 +630,10 @@
     const step = Number($('ratioSlider').value);
     const option = RATIO_OPTIONS[step] || RATIO_OPTIONS[3];
     const ratio = option.value == null ? null : option.value;
+    const featureCompensationEnabled = !$('featureCompensationPanel').classList.contains('hidden')
+      && $('featureCompensation').checked;
+    const minimumFeatureWidthMm = Number($('minimumFeatureWidthMm').value);
+    if (featureCompensationEnabled && !$('minimumFeatureWidthMm').reportValidity()) return;
     state.directPrintState = 'sending';
     setDockBusy(true);
     $('printSettings').classList.add('hidden');
@@ -604,16 +642,30 @@
     showPrintDialogProgress(0.04, '正在准备体素网格', t('print.reading', { format: String(state.result.outputFormat || state.outputFormat).toUpperCase() }));
     try {
       showPrintDialogProgress(0.08, t('print.sending', { name: printer.name }), ratio == null ? localizeText('正在准备体素模型') : t('print.scaling', { percent: Math.round(ratio * 100) }));
-      const record = await window.voxkit.sendToPrinter({ printerId: printer.id, sourcePath: voxelPath, ratio, originalSourcePath: state.result.sourcePath || state.inputPath, conversion: state.conversion, locale: language });
+      const printSourcePath = featureCompensationEnabled
+        ? (state.conversion?.voxelDataPath || voxelPath)
+        : voxelPath;
+      const record = await window.voxkit.sendToPrinter({
+        printerId: printer.id,
+        sourcePath: printSourcePath,
+        ratio,
+        minimumFeatureWidthMm: featureCompensationEnabled ? minimumFeatureWidthMm : null,
+        originalSourcePath: state.result.sourcePath || state.inputPath,
+        conversion: state.conversion,
+        locale: language
+      });
       state.printOutputPath = record.outputPath;
       appendLog(t('print.sentLog', { printer: record.printerName, slicer: record.slicerName, path: record.outputPath }));
       const fitted = record.fittedDimensions?.map((dimension) => Number(dimension).toFixed(1)).join(' × ');
       const scaleText = record.scale === 1 ? localizeText('原始尺寸') : t('print.fit', { size: fitted, percent: (record.scale * 100).toFixed(1) });
+      const featureText = Number.isFinite(record.minimumFeatureWidthMm)
+        ? t('print.featureApplied', { width: Number(record.minimumFeatureWidthMm).toFixed(1) })
+        : '';
       $('printDialogFeedback').classList.add('success');
       state.directPrintState = 'success';
       $('printFeedbackIcon').innerHTML = '<i class="ph-thin ph-check" aria-hidden="true"></i>';
       setText('printFeedbackTitle', t('print.sent', { name: record.slicerName }));
-      setText('printFeedbackDetail', `${basename(record.outputPath)} · ${scaleText}`);
+      setText('printFeedbackDetail', `${basename(record.outputPath)} · ${scaleText}${featureText ? ` · ${featureText}` : ''}`);
       $('printFeedbackBar').style.width = '100%';
       setText('printFeedbackPercent', '100%');
       $('confirmPrintDialog').disabled = false;
@@ -826,6 +878,8 @@
     syncRatioPanel();
   });
   $('ratioSlider').addEventListener('input', updateRatioPreview);
+  $('featureCompensation').addEventListener('change', syncFeatureCompensationPanel);
+  $('minimumFeatureWidthMm').addEventListener('input', updateFeatureCompensationHint);
   $('ratioStops').addEventListener('click', (event) => {
     const stop = event.target.closest('[data-ratio-step]');
     if (!stop) return;
@@ -878,7 +932,11 @@
     if (group.dataset.setting === 'fill') state.fill = button.dataset.value;
     if (group.dataset.setting === 'quality') state.quality = button.dataset.value;
     if (group.dataset.setting === 'preview') state.preview = button.dataset.value;
-    if (group.dataset.setting === 'splitParts') state.splitParts = button.dataset.value;
+    if (group.dataset.setting === 'splitParts') {
+      state.splitParts = button.dataset.value;
+      state.result = null;
+      syncFormatUI();
+    }
   }));
   $('sidebarToggle').addEventListener('click', () => {
     const collapsed = $('appShell').classList.toggle('sidebar-collapsed');

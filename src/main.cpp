@@ -1,5 +1,6 @@
 #include "voxelizer.hpp"
 
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -10,8 +11,8 @@ namespace {
 void usage()
 {
   std::cerr << "Usage: voxkit <input.glb|input.obj|input.stl> [-r resolution]\n"
-            << "              [--voxel-mode pixel|triangle|quad] [--split-parts] [-o output.binvox]\n"
-            << "       voxkit --export-<obj|glb|stl|3mf> <input.binvox> -o output.<format>\n"
+            << "              [--voxel-mode pixel|triangle|quad] [--minimum-feature-width-mm width] [--split-parts] [-o output.binvox]\n"
+            << "       voxkit --export-<obj|glb|stl|3mf> <input.binvox> [-o output.<format>] [--minimum-feature-width-mm width] [--scale factor]\n"
             << "       voxkit --convert-<obj|glb|stl|3mf> <input.mesh> -o output.<format>\n";
 }
 
@@ -53,6 +54,8 @@ int main(int argc, char** argv)
     int resolution = 128;
     bool splitParts = false;
     VoxelizationMode voxelMode = VoxelizationMode::Pixel;
+    double minimumFeatureWidth = 0.0;
+    double modelScale = 1.0;
     std::string exportFormat;
     std::string convertFormat;
 
@@ -68,6 +71,16 @@ int main(int argc, char** argv)
         resolution = std::stoi(argv[++i]);
       } else if (arg == "--split-parts") {
         splitParts = true;
+      } else if (arg == "--minimum-feature-width-mm" && i + 1 < argc) {
+        minimumFeatureWidth = std::stod(argv[++i]);
+        if (!std::isfinite(minimumFeatureWidth) || minimumFeatureWidth <= 0.0) {
+          throw std::runtime_error("minimum feature width must be greater than zero");
+        }
+      } else if (arg == "--scale" && i + 1 < argc) {
+        modelScale = std::stod(argv[++i]);
+        if (!std::isfinite(modelScale) || modelScale <= 0.0) {
+          throw std::runtime_error("scale must be greater than zero");
+        }
       } else if (arg == "--voxel-mode" && i + 1 < argc) {
         voxelMode = parseVoxelizationMode(argv[++i]);
       } else if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
@@ -112,6 +125,12 @@ int main(int argc, char** argv)
       }
       progress(5, "loading-binvox");
       VoxelGrid grid = readBinvox(input);
+      std::size_t expandedVoxels = 0;
+      if (minimumFeatureWidth > 0.0) expandedVoxels = thickenThinFeatures(grid, minimumFeatureWidth);
+      if (modelScale != 1.0) {
+        grid.voxelSize *= modelScale;
+        for (double& coordinate : grid.origin) coordinate *= modelScale;
+      }
       progress(85, "writing-" + exportFormat);
       if (exportFormat == "stl") writeStl(grid, output, grid.mode);
       else if (exportFormat == "obj") writeObj(grid, output, grid.mode);
@@ -123,6 +142,7 @@ int main(int argc, char** argv)
                 << " voxelSize=" << grid.voxelSize << " voxelMode=" << voxelizationModeName(grid.mode)
                 << " colors=" << (grid.hasColors() ? "true" : "false")
                 << " topology=" << (grid.mode == VoxelizationMode::Pixel ? "blocks" : grid.mode == VoxelizationMode::Triangle ? "triangles" : "quads")
+                << " featureWidthMm=" << minimumFeatureWidth << " expandedVoxels=" << expandedVoxels << " scale=" << modelScale
                 << std::endl;
       return 0;
     }
@@ -130,17 +150,26 @@ int main(int argc, char** argv)
 
     progress(5, "loading-mesh");
     std::string backend;
-    VoxelGrid grid = voxelizeMesh(input, resolution, voxelMode, &backend);
+    VoxelGrid grid = voxelizeMesh(input, resolution, voxelMode, &backend, splitParts);
+    std::size_t expandedVoxels = 0;
+    if (minimumFeatureWidth > 0.0) expandedVoxels = thickenThinFeatures(grid, minimumFeatureWidth);
+    if (modelScale != 1.0) {
+      grid.voxelSize *= modelScale;
+      for (double& coordinate : grid.origin) coordinate *= modelScale;
+    }
     progress(85, "writing-binvox");
     writeBinvox(grid, output);
     progress(100, "done");
 
-    const std::size_t components = splitParts ? grid.connectedComponents() : 0;
+    const std::size_t components = splitParts
+      ? (grid.hasParts() ? grid.partCount() : grid.connectedComponents())
+      : 0;
     std::cout << "VOXKIT_RESULT input=\"" << input << "\" output=\"" << output << "\" resolution=" << resolution
           << " occupied=" << grid.occupied() << " voxelSize=" << grid.voxelSize
           << " voxelMode=" << voxelizationModeName(voxelMode) << " backend=" << backend
           << " colors=" << (grid.hasColors() ? "true" : "false")
           << " topology=" << (voxelMode == VoxelizationMode::Pixel ? "blocks" : voxelMode == VoxelizationMode::Triangle ? "triangles" : "quads")
+          << " featureWidthMm=" << minimumFeatureWidth << " expandedVoxels=" << expandedVoxels << " scale=" << modelScale
           << " splitParts=" << (splitParts ? "true" : "false") << " components=" << components << std::endl;
     return 0;
   } catch (const std::exception& ex) {

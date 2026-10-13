@@ -22,7 +22,9 @@ This is particularly useful for 3D printing models made from many fine component
 - Offline, local mesh-to-voxel conversion
 - macOS Metal/GPU support and Windows CPU support
 - Binvox, OBJ, STL, and 3MF export
+- When part splitting is enabled, detects source STL bodies before voxelization, keeps coincident-face seams separate, and voxelizes each body independently. OBJ, GLB, and 3MF preserve object grouping; STL remains available and contains the separated voxel shells as one STL mesh
 - Print-scale settings for different 3D printers, slicer integration, and export-history management
+- Pixel-mode detail compensation scales narrow features for the selected print size, with a default 0.8 mm target for two lines from a 0.4 mm nozzle; features lost during voxelization cannot be restored
 
 ## Roadmap
 

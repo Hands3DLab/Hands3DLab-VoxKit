@@ -343,6 +343,12 @@ async function exportModel(settings) {
   if (path.resolve(settings.inputPath) === path.resolve(settings.outputPath)) throw localizedError(locale, '另存文件不能覆盖当前 Binvox 缓存。', 'The exported file cannot overwrite the current Binvox cache.');
   if (format === 'binvox') {
     fs.copyFileSync(settings.inputPath, settings.outputPath);
+    for (const suffix of ['.colors', '.parts']) {
+      const sourceSidecar = `${settings.inputPath}${suffix}`;
+      const outputSidecar = `${settings.outputPath}${suffix}`;
+      if (fs.existsSync(sourceSidecar)) fs.copyFileSync(sourceSidecar, outputSidecar);
+      else if (fs.existsSync(outputSidecar)) fs.unlinkSync(outputSidecar);
+    }
     const stats = fs.statSync(settings.outputPath);
     if (!stats.isFile() || stats.size < 4) throw localizedError(locale, `导出的 BINVOX 文件无效：${settings.outputPath}`, `The exported BINVOX file is invalid: ${settings.outputPath}`);
     const exported = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`, exportedAt: new Date().toISOString(), operation: 'model-export', format: 'BINVOX', sourcePath: settings.inputPath, originalSourcePath: settings.originalSourcePath || settings.inputPath, outputPath: settings.outputPath, bytes: stats.size, conversion: normalizeConversion(settings.conversion) };
@@ -382,7 +388,7 @@ async function exportSourceModel(settings) {
 function findPrinter(printerId) { return PRINTERS.find((printer) => printer.id === printerId); }
 function normalizeConversion(conversion) {
   if (!conversion || typeof conversion !== 'object') return null;
-  const allowed = ['sourcePath', 'outputPath', 'voxelDataPath', 'outputFormat', 'format', 'resolution', 'occupied', 'voxelSize', 'voxelMode', 'backend', 'topology', 'validationPassed', 'log'];
+  const allowed = ['sourcePath', 'outputPath', 'voxelDataPath', 'outputFormat', 'format', 'resolution', 'occupied', 'voxelSize', 'voxelMode', 'backend', 'topology', 'components', 'splitParts', 'validationPassed', 'log'];
   const result = {};
   for (const key of allowed) {
     if (conversion[key] !== undefined && conversion[key] !== null) result[key] = conversion[key];
@@ -463,29 +469,105 @@ async function sendToPrinter(settings) {
   }
   let extension = path.extname(sourcePath).slice(1).toLowerCase();
   if (!sourceStats.isFile()) throw localizedError(locale, '源模型文件无效。', 'The source model file is invalid.');
+  const ratio = settings.ratio == null ? null : Number(settings.ratio);
+  const isOriginal = ratio === null || !Number.isFinite(ratio) || ratio <= 0;
+  const minimumFeatureWidthMm = settings.minimumFeatureWidthMm == null
+    ? null
+    : Number(settings.minimumFeatureWidthMm);
+  const featureCompensation = minimumFeatureWidthMm !== null;
+  if (featureCompensation && (!Number.isFinite(minimumFeatureWidthMm) || minimumFeatureWidthMm < 0.4 || minimumFeatureWidthMm > 1.6)) {
+    throw localizedError(locale, '像素细节目标厚度必须在 0.4 到 1.6 mm 之间。', 'Pixel detail width must be between 0.4 and 1.6 mm.');
+  }
+  if (featureCompensation && (extension !== 'binvox' || settings.conversion?.voxelMode !== 'pixel')) {
+    throw localizedError(locale, '细节补偿仅支持像素模式生成的体素缓存。', 'Detail compensation requires a voxel cache created in Pixel mode.');
+  }
+  let scale = 1;
+  let dimensions;
+  let expandedVoxels = 0;
+  let sourcePreScaled = false;
   if (extension === 'binvox') {
     const binary = locateVoxkit();
     if (!binary) throw localizedError(locale, '未找到体素化引擎，请检查应用安装是否完整。', 'Voxelization engine not found. Please check that the application is installed correctly.');
     const printDirectory = path.join(app.getPath('temp'), 'hands3dlab-voxkit-print');
     fs.mkdirSync(printDirectory, { recursive: true });
-    const voxel3mfPath = path.join(printDirectory, `${path.basename(sourcePath, '.binvox')}-${Date.now()}.3mf`);
-    const exportResult = await runVoxelizer(binary, ['--export-3mf', sourcePath, '-o', voxel3mfPath], 'print-export:progress', (value) => value, locale);
-    if (exportResult.code !== 0) throw new Error(exportResult.stderr || localized(locale, `体素 3MF 导出失败（退出码 ${exportResult.code}）`, `Voxel 3MF export failed (exit code ${exportResult.code})`));
-    sourcePath = voxel3mfPath;
-    sourceStats = fs.statSync(sourcePath);
+    const token = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let base3mfPath;
+    if (!isOriginal || !featureCompensation) {
+      base3mfPath = path.join(printDirectory, `${path.basename(sourcePath, '.binvox')}-${token}-base.3mf`);
+      const baseExport = await runVoxelizer(binary, ['--export-3mf', sourcePath, '-o', base3mfPath], 'print-export:progress', (value) => value, locale);
+      if (baseExport.code !== 0) throw new Error(baseExport.stderr || localized(locale, `体素 3MF 导出失败（退出码 ${baseExport.code}）`, `Voxel 3MF export failed (exit code ${baseExport.code})`));
+    }
+
+    let prepared3mfPath = base3mfPath;
+    if (!isOriginal) {
+      dimensions = await inspectModel(slicer, base3mfPath, locale);
+      scale = fitScale(dimensions, printer.buildVolume, ratio);
+      if (!Number.isFinite(scale) || scale <= 0) throw localizedError(locale, '无法计算模型缩放比例。', 'The model scale could not be calculated.');
+    }
+
+    if (featureCompensation) {
+      if (isOriginal) {
+        const detail3mfPath = path.join(printDirectory, `${path.basename(sourcePath, '.binvox')}-${token}-details.3mf`);
+        const exportResult = await runVoxelizer(binary, [
+          '--export-3mf', sourcePath, '-o', detail3mfPath,
+          '--minimum-feature-width-mm', String(minimumFeatureWidthMm)
+        ], 'print-export:progress', (value) => value, locale);
+        if (exportResult.code !== 0) throw new Error(exportResult.stderr || localized(locale, `像素细节补偿失败（退出码 ${exportResult.code}）`, `Pixel detail compensation failed (exit code ${exportResult.code})`));
+        expandedVoxels = Number(exportResult.stdout.match(/expandedVoxels=(\d+)/)?.[1] || 0);
+        dimensions = await inspectModel(slicer, detail3mfPath, locale);
+        prepared3mfPath = detail3mfPath;
+      } else {
+        const scaled3mfPath = path.join(printDirectory, `${path.basename(sourcePath, '.binvox')}-${token}-scaled.3mf`);
+        let candidateScale = scale;
+        let fittedDimensions;
+        let fitted = false;
+        for (let attempt = 0; attempt < 16; attempt += 1) {
+          const scaleArgs = [
+            '--export-3mf', sourcePath, '-o', scaled3mfPath,
+            '--minimum-feature-width-mm', String(minimumFeatureWidthMm / candidateScale),
+            '--scale', String(candidateScale)
+          ];
+          const scaledExport = await runVoxelizer(binary, scaleArgs, 'print-export:progress', (value) => value, locale);
+          if (scaledExport.code !== 0) throw new Error(scaledExport.stderr || localized(locale, `像素细节补偿失败（退出码 ${scaledExport.code}）`, `Pixel detail compensation failed (exit code ${scaledExport.code})`));
+          expandedVoxels = Number(scaledExport.stdout.match(/expandedVoxels=(\d+)/)?.[1] || 0);
+          fittedDimensions = await inspectModel(slicer, scaled3mfPath, locale);
+          const correction = fitScale(fittedDimensions, printer.buildVolume, ratio);
+          if (!Number.isFinite(correction) || correction <= 0) throw localizedError(locale, '无法计算模型缩放比例。', 'The model scale could not be calculated.');
+          if (correction >= 1) {
+            scale = candidateScale;
+            dimensions = fittedDimensions.map((dimension) => dimension / scale);
+            prepared3mfPath = scaled3mfPath;
+            fitted = true;
+            break;
+          }
+          candidateScale *= correction;
+        }
+        if (!fitted) throw localizedError(locale, '细节补偿后的模型仍无法适配成型空间。', 'The detail-compensated model could not be fitted to the build volume.');
+        sourcePreScaled = true;
+      }
+    }
+
+    if (!isOriginal && !featureCompensation) {
+      const scaled3mfPath = path.join(printDirectory, `${path.basename(sourcePath, '.binvox')}-${token}-scaled.3mf`);
+      const scaleArgs = ['--export-3mf', sourcePath, '-o', scaled3mfPath];
+      scaleArgs.push('--scale', String(scale));
+      const scaledExport = await runVoxelizer(binary, scaleArgs, 'print-export:progress', (value) => value, locale);
+      if (scaledExport.code !== 0) throw new Error(scaledExport.stderr || localized(locale, `体素模型缩放失败（退出码 ${scaledExport.code}）`, `Voxel model scaling failed (exit code ${scaledExport.code})`));
+      prepared3mfPath = scaled3mfPath;
+      sourcePreScaled = true;
+    }
+
+    sourcePath = prepared3mfPath;
     extension = '3mf';
+    sourceStats = fs.statSync(sourcePath);
   }
   if (!slicer.extensions.includes(extension)) {
     throw localizedError(locale, `${printer.name} 暂不支持直接导入 .${extension || '该'} 文件。`, `${printer.name} cannot directly import .${extension || 'this'} files yet.`);
   }
-  const ratio = settings.ratio == null ? null : Number(settings.ratio);
-  const isOriginal = ratio === null || !Number.isFinite(ratio) || ratio <= 0;
-  let scale = 1;
-  let dimensions;
   let openedPath = sourcePath;
-  if (!isOriginal) {
-    dimensions = await inspectModel(slicer, sourcePath, locale);
-    scale = fitScale(dimensions, printer.buildVolume, ratio);
+  if (!isOriginal && !sourcePreScaled) {
+    if (!dimensions) dimensions = await inspectModel(slicer, sourcePath, locale);
+    if (scale === 1) scale = fitScale(dimensions, printer.buildVolume, ratio);
     if (!Number.isFinite(scale) || scale <= 0) throw localizedError(locale, '无法计算模型缩放比例。', 'The model scale could not be calculated.');
     if (extension === '3mf') throw localizedError(locale, '3MF 暂不支持自动缩放；请先选择原始尺寸或导出 STL 后缩放。', 'Automatic scaling is not yet supported for 3MF. Use the original size or export STL before scaling.');
     openedPath = createScaledMesh(sourcePath, scale, extension);
@@ -528,6 +610,7 @@ async function sendToPrinter(settings) {
     scale,
     fittedDimensions: dimensions?.map((dimension) => dimension * scale),
     buildVolume: printer.buildVolume,
+    ...(featureCompensation ? { minimumFeatureWidthMm, expandedVoxels } : {}),
     conversion: normalizeConversion(settings.conversion)
   };
   addExportRecord(record);

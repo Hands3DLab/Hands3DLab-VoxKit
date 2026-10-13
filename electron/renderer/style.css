@@ -430,6 +430,19 @@ html[data-platform="darwin"] .topbar { padding-left: 84px; }
 .ratio-stops span[data-ratio-step="2"] { left: 50%; }
 .ratio-stops span[data-ratio-step="3"] { left: calc(var(--thumb) / 2 + (100% - var(--thumb)) * 0.75); }
 .ratio-stops span[data-ratio-step="4"] { left: calc(100% - var(--thumb) / 2); }
+.feature-compensation { display: grid; gap: 12px; padding: 14px 16px; border: 1px solid rgba(0,122,255,.2); border-radius: 12px; background: linear-gradient(135deg,rgba(0,122,255,.055),#fff 58%); }
+.feature-compensation-toggle { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.feature-compensation-toggle input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent); }
+.feature-compensation-toggle span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.feature-compensation-toggle strong { font-size: 13px; }
+.feature-compensation-toggle small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.feature-width-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 2px; color: var(--muted); font-size: 11px; }
+.feature-width-input { display: inline-flex; align-items: center; gap: 6px; }
+.feature-width-input input { width: 78px; height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; }
+.feature-width-input b { color: var(--muted); font-size: 11px; font-weight: 600; }
+.feature-compensation-hint { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.feature-compensation:has(input:not(:checked)) .feature-width-field,
+.feature-compensation:has(input:not(:checked)) .feature-compensation-hint { opacity: .48; }
 .ratio-preview { display: flex; align-items: center; gap: 18px; margin: 0; padding: 16px; border: 1px dashed rgba(0,0,0,.16); border-radius: 12px; background: #fff; }
 .ratio-preview-cube { position: relative; width: 76px; height: 76px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 10px; border: 1px solid rgba(0,122,255,.3); background: linear-gradient(145deg,rgba(0,122,255,.16),rgba(0,122,255,.04)); transition: width 160ms ease, height 160ms ease; }
 .ratio-preview-cube span { color: var(--accent); font-size: 13px; font-weight: 700; }

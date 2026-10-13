@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -210,6 +211,202 @@ void readMesh(const std::string& path, std::vector<Vec3>& positions,
   if (positions.empty() || triangles.empty()) throw std::runtime_error("mesh contains no triangles");
 }
 
+struct QuantizedPoint {
+  std::int64_t x, y, z;
+  bool operator==(const QuantizedPoint& other) const
+  {
+    return x == other.x && y == other.y && z == other.z;
+  }
+};
+
+struct QuantizedPointHash {
+  std::size_t operator()(const QuantizedPoint& point) const
+  {
+    std::size_t value = std::hash<std::int64_t>{}(point.x);
+    value ^= std::hash<std::int64_t>{}(point.y) + 0x9e3779b9U + (value << 6U) + (value >> 2U);
+    value ^= std::hash<std::int64_t>{}(point.z) + 0x9e3779b9U + (value << 6U) + (value >> 2U);
+    return value;
+  }
+};
+
+std::vector<std::uint32_t> findTriangleParts(const std::vector<Vec3>& positions,
+                                              const std::vector<Tri>& triangles)
+{
+  if (triangles.empty()) return {};
+  Vec3 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
+  Vec3 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
+  for (const Vec3& point : positions) for (int axis = 0; axis < 3; ++axis) {
+    minimum[axis] = std::min(minimum[axis], point[axis]);
+    maximum[axis] = std::max(maximum[axis], point[axis]);
+  }
+  const double span = std::max({maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 1e-9});
+  const double tolerance = std::max(span * 1e-7, 1e-9);
+  std::unordered_map<QuantizedPoint, std::uint32_t, QuantizedPointHash> weldedVertices;
+  std::vector<std::array<std::uint32_t, 3>> triangleVertices;
+  triangleVertices.reserve(triangles.size());
+  for (const Tri& triangle : triangles) {
+    std::array<std::uint32_t, 3> welded{};
+    for (int corner = 0; corner < 3; ++corner) {
+      if (triangle[corner] >= positions.size()) throw std::runtime_error("triangle vertex index out of range");
+      const Vec3& point = positions[triangle[corner]];
+      const QuantizedPoint key{
+        static_cast<std::int64_t>(std::llround((point[0] - minimum[0]) / tolerance)),
+        static_cast<std::int64_t>(std::llround((point[1] - minimum[1]) / tolerance)),
+        static_cast<std::int64_t>(std::llround((point[2] - minimum[2]) / tolerance))
+      };
+      const auto [entry, inserted] = weldedVertices.emplace(key, static_cast<std::uint32_t>(weldedVertices.size()));
+      (void)inserted;
+      welded[corner] = entry->second;
+    }
+    triangleVertices.push_back(welded);
+  }
+
+  // STL does not carry object/group records.  A number of exporters preserve
+  // separate source bodies by writing coincident faces twice, which produces
+  // four triangles on a shared edge.  Joining every edge (the old behaviour)
+  // therefore collapses those bodies into one component.  First build the
+  // manifold shells using only ordinary two-face edges, then attach tiny
+  // fragments to the nearest substantial shell.
+  std::vector<std::size_t> parent(triangles.size());
+  std::vector<std::uint8_t> rank(triangles.size(), 0);
+  for (std::size_t index = 0; index < parent.size(); ++index) parent[index] = index;
+  const auto rootOf = [&parent](std::size_t item) {
+    std::size_t root = item;
+    while (parent[root] != root) root = parent[root];
+    while (parent[item] != item) {
+      const std::size_t next = parent[item];
+      parent[item] = root;
+      item = next;
+    }
+    return root;
+  };
+  const auto join = [&parent, &rank, &rootOf](std::size_t left, std::size_t right) {
+    left = rootOf(left);
+    right = rootOf(right);
+    if (left == right) return;
+    if (rank[left] < rank[right]) std::swap(left, right);
+    parent[right] = left;
+    if (rank[left] == rank[right]) ++rank[left];
+  };
+  std::unordered_map<std::uint64_t, std::vector<std::size_t>> trianglesByEdge;
+  trianglesByEdge.reserve(triangles.size() * 2);
+  for (std::size_t triangleIndex = 0; triangleIndex < triangleVertices.size(); ++triangleIndex) {
+    const auto& vertices = triangleVertices[triangleIndex];
+    for (int edge = 0; edge < 3; ++edge) {
+      std::uint32_t a = vertices[edge];
+      std::uint32_t b = vertices[(edge + 1) % 3];
+      if (a > b) std::swap(a, b);
+      const std::uint64_t key = static_cast<std::uint64_t>(a) << 32U | b;
+      trianglesByEdge[key].push_back(triangleIndex);
+    }
+  }
+
+  // Join only manifold edges.  Edges with four incident facets are the common
+  // STL representation of two touching source bodies and must remain seams.
+  for (const auto& [edge, incident] : trianglesByEdge) {
+    (void)edge;
+    if (incident.size() == 2) join(incident[0], incident[1]);
+  }
+
+  struct Component {
+    std::vector<std::size_t> triangles;
+    Vec3 centroid{};
+    std::size_t firstTriangle = std::numeric_limits<std::size_t>::max();
+  };
+  std::unordered_map<std::size_t, std::size_t> componentIndex;
+  std::vector<Component> components;
+  componentIndex.reserve(triangles.size());
+  std::vector<std::size_t> triangleComponents(triangles.size());
+  for (std::size_t index = 0; index < triangles.size(); ++index) {
+    const std::size_t root = rootOf(index);
+    auto entry = componentIndex.find(root);
+    if (entry == componentIndex.end()) {
+      const std::size_t component = components.size();
+      componentIndex.emplace(root, component);
+      components.emplace_back();
+      entry = componentIndex.find(root);
+    }
+    const std::size_t component = entry->second;
+    triangleComponents[index] = component;
+    Component& target = components[component];
+    target.triangles.push_back(index);
+    target.firstTriangle = std::min(target.firstTriangle, index);
+    const Tri& triangle = triangles[index];
+    for (std::uint32_t vertex : triangle) target.centroid = add(target.centroid, positions[vertex]);
+  }
+  for (Component& component : components) {
+    const double divisor = static_cast<double>(component.triangles.size()) * 3.0;
+    component.centroid = mul(component.centroid, 1.0 / divisor);
+  }
+
+  // In a large STL, isolated sliver components are usually the loose half of
+  // a duplicated seam.  Keep every substantial manifold shell as its own
+  // source part, and fold only these slivers back into a neighbouring shell.
+  const std::size_t minimumPartTriangles = triangles.size() <= 64
+    ? 1
+    : std::max<std::size_t>(8, triangles.size() / 5000);
+  std::vector<std::size_t> substantial;
+  for (std::size_t index = 0; index < components.size(); ++index) {
+    if (components[index].triangles.size() >= minimumPartTriangles) substantial.push_back(index);
+  }
+  if (substantial.empty()) {
+    substantial.push_back(static_cast<std::size_t>(std::distance(
+      components.begin(), std::max_element(components.begin(), components.end(),
+        [](const Component& left, const Component& right) {
+          return left.triangles.size() < right.triangles.size();
+        }))));
+  }
+
+  std::vector<std::size_t> owner(components.size(), std::numeric_limits<std::size_t>::max());
+  for (std::size_t component : substantial) owner[component] = component;
+  for (std::size_t small = 0; small < components.size(); ++small) {
+    if (owner[small] != std::numeric_limits<std::size_t>::max()) continue;
+    std::unordered_map<std::size_t, std::size_t> seamTouches;
+    for (const auto& [edge, incident] : trianglesByEdge) {
+      (void)edge;
+      if (incident.size() <= 2) continue;
+      bool touchesSmall = false;
+      std::unordered_set<std::size_t> neighbours;
+      for (std::size_t triangle : incident) {
+        const std::size_t component = triangleComponents[triangle];
+        if (component == small) touchesSmall = true;
+        else if (owner[component] == component) neighbours.insert(component);
+      }
+      if (touchesSmall) for (std::size_t neighbour : neighbours) ++seamTouches[neighbour];
+    }
+    std::size_t selected = substantial.front();
+    std::size_t selectedTouches = 0;
+    double selectedDistance = std::numeric_limits<double>::max();
+    for (std::size_t candidate : substantial) {
+      const auto touch = seamTouches.find(candidate);
+      const std::size_t touchCount = touch == seamTouches.end() ? 0 : touch->second;
+      const Vec3 delta = sub(components[small].centroid, components[candidate].centroid);
+      const double distance = lengthSquared(delta);
+      if (touchCount > selectedTouches
+          || (touchCount == selectedTouches && distance < selectedDistance)) {
+        selected = candidate;
+        selectedTouches = touchCount;
+        selectedDistance = distance;
+      }
+    }
+    owner[small] = selected;
+  }
+
+  std::vector<std::size_t> ordered = substantial;
+  std::sort(ordered.begin(), ordered.end(), [&components](std::size_t left, std::size_t right) {
+    return components[left].firstTriangle < components[right].firstTriangle;
+  });
+  std::unordered_map<std::size_t, std::uint32_t> partIds;
+  for (std::size_t index = 0; index < ordered.size(); ++index) {
+    partIds[ordered[index]] = static_cast<std::uint32_t>(index + 1);
+  }
+  std::vector<std::uint32_t> parts(triangles.size());
+  for (std::size_t index = 0; index < triangles.size(); ++index) {
+    parts[index] = partIds[owner[triangleComponents[index]]];
+  }
+  return parts;
+}
+
 ColorRGBA8 rgba8(const FloatColor& color)
 {
   auto channel = [](float value) {
@@ -301,10 +498,209 @@ std::size_t VoxelGrid::occupied() const
   return static_cast<std::size_t>(std::count(data.begin(), data.end(), static_cast<std::uint8_t>(1)));
 }
 
-VoxelGrid Voxelizer::voxelize(const std::vector<Vec3>& positions, const std::vector<Tri>& triangles, int gridResolution)
+std::size_t VoxelGrid::partCount() const
+{
+  if (!hasParts()) return 0;
+  std::uint32_t maximum = *std::max_element(partIds.begin(), partIds.end());
+  for (const PartVoxelMembership& membership : partOverlaps) maximum = std::max(maximum, membership.partId);
+  return static_cast<std::size_t>(maximum);
+}
+
+std::size_t thickenThinFeatures(VoxelGrid& grid, double minimumWidth)
+{
+  if (!std::isfinite(minimumWidth) || minimumWidth <= 0.0) {
+    throw std::runtime_error("minimum feature width must be greater than zero");
+  }
+  if (grid.mode != VoxelizationMode::Pixel) {
+    throw std::runtime_error("minimum feature compensation is only available in pixel mode");
+  }
+  if (grid.resolution <= 0 || !(grid.voxelSize > 0.0)
+      || grid.data.size() != static_cast<std::size_t>(grid.resolution) * grid.resolution * grid.resolution) {
+    throw std::runtime_error("invalid voxel grid for feature compensation");
+  }
+
+  const double requestedVoxels = std::ceil(minimumWidth / grid.voxelSize - 1e-9);
+  if (!std::isfinite(requestedVoxels) || requestedVoxels > 4095.0) {
+    throw std::runtime_error("minimum feature width is too large for the voxel grid");
+  }
+  const int minimumVoxels = std::max(1, static_cast<int>(requestedVoxels));
+  if (minimumVoxels <= 1 || grid.occupied() == 0) return 0;
+
+  const int maximumGrowth = minimumVoxels / 2;
+  const int expandedResolution = grid.resolution + maximumGrowth * 2;
+  if (expandedResolution > 2048) {
+    throw std::runtime_error("feature compensation would exceed the 2048 voxel grid limit");
+  }
+
+  const int n = grid.resolution;
+  const std::size_t plane = static_cast<std::size_t>(n) * n;
+  const std::size_t cellCount = grid.data.size();
+  constexpr std::uint16_t infinity = std::numeric_limits<std::uint16_t>::max();
+  std::vector<std::uint16_t> distance(cellCount, 0);
+  for (std::size_t index = 0; index < cellCount; ++index) {
+    if (grid.data[index]) distance[index] = infinity;
+  }
+
+  // Two city-block sweeps give a compact distance field suitable for a
+  // conservative pixel-width estimate without a large per-voxel queue.
+  for (int z = 0; z < n; ++z) {
+    for (int y = 0; y < n; ++y) {
+      for (int x = 0; x < n; ++x) {
+        const std::size_t index = static_cast<std::size_t>(x) + static_cast<std::size_t>(y) * n + static_cast<std::size_t>(z) * plane;
+        if (!grid.data[index]) continue;
+        std::uint16_t value = distance[index];
+        if (x == 0 || y == 0 || z == 0) value = 1;
+        const auto relax = [&value, &distance](std::size_t neighbor) {
+          if (distance[neighbor] < std::numeric_limits<std::uint16_t>::max() - 1) {
+            value = std::min(value, static_cast<std::uint16_t>(distance[neighbor] + 1));
+          }
+        };
+        if (x > 0) relax(index - 1);
+        if (y > 0) relax(index - n);
+        if (z > 0) relax(index - plane);
+        distance[index] = value;
+      }
+    }
+  }
+  for (int z = n - 1; z >= 0; --z) {
+    for (int y = n - 1; y >= 0; --y) {
+      for (int x = n - 1; x >= 0; --x) {
+        const std::size_t index = static_cast<std::size_t>(x) + static_cast<std::size_t>(y) * n + static_cast<std::size_t>(z) * plane;
+        if (!grid.data[index]) continue;
+        std::uint16_t value = distance[index];
+        if (x == n - 1 || y == n - 1 || z == n - 1) value = std::min<std::uint16_t>(value, 1);
+        const auto relax = [&value, &distance](std::size_t neighbor) {
+          if (distance[neighbor] < std::numeric_limits<std::uint16_t>::max() - 1) {
+            value = std::min(value, static_cast<std::uint16_t>(distance[neighbor] + 1));
+          }
+        };
+        if (x + 1 < n) relax(index + 1);
+        if (y + 1 < n) relax(index + n);
+        if (z + 1 < n) relax(index + plane);
+        distance[index] = value;
+      }
+    }
+  }
+
+  const bool hasColors = grid.hasColors();
+  VoxelGrid expanded;
+  expanded.resolution = expandedResolution;
+  expanded.origin = {grid.origin[0] - maximumGrowth * grid.voxelSize,
+                     grid.origin[1] - maximumGrowth * grid.voxelSize,
+                     grid.origin[2] - maximumGrowth * grid.voxelSize};
+  expanded.voxelSize = grid.voxelSize;
+  expanded.mode = grid.mode;
+  const std::size_t expandedCount = static_cast<std::size_t>(expandedResolution) * expandedResolution * expandedResolution;
+  expanded.data.assign(expandedCount, 0);
+  if (hasColors) expanded.colors.assign(expandedCount, ColorRGBA8{});
+  const bool hasParts = grid.hasParts();
+  if (hasParts) expanded.partIds.assign(expandedCount, 0);
+  const std::size_t expandedPlane = static_cast<std::size_t>(expandedResolution) * expandedResolution;
+  const auto expandedIndex = [expandedResolution, expandedPlane](int x, int y, int z) {
+    return static_cast<std::size_t>(x) + static_cast<std::size_t>(y) * expandedResolution
+      + static_cast<std::size_t>(z) * expandedPlane;
+  };
+  for (int z = 0; z < n; ++z) {
+    for (int y = 0; y < n; ++y) {
+      const std::size_t sourceRow = static_cast<std::size_t>(y) * n + static_cast<std::size_t>(z) * plane;
+      const std::size_t targetRow = expandedIndex(maximumGrowth, y + maximumGrowth, z + maximumGrowth);
+      std::copy_n(grid.data.begin() + static_cast<std::ptrdiff_t>(sourceRow), n,
+                  expanded.data.begin() + static_cast<std::ptrdiff_t>(targetRow));
+      if (hasColors) {
+        std::copy_n(grid.colors.begin() + static_cast<std::ptrdiff_t>(sourceRow), n,
+                    expanded.colors.begin() + static_cast<std::ptrdiff_t>(targetRow));
+      }
+      if (hasParts) {
+        std::copy_n(grid.partIds.begin() + static_cast<std::ptrdiff_t>(sourceRow), n,
+                    expanded.partIds.begin() + static_cast<std::ptrdiff_t>(targetRow));
+      }
+    }
+  }
+  if (hasParts) {
+    expanded.partOverlaps.reserve(grid.partOverlaps.size());
+    for (const PartVoxelMembership& membership : grid.partOverlaps) {
+      const int x = static_cast<int>(membership.voxelIndex % n);
+      const int y = static_cast<int>((membership.voxelIndex / n) % n);
+      const int z = static_cast<int>(membership.voxelIndex / plane);
+      const std::size_t expandedVoxel = expandedIndex(x + maximumGrowth, y + maximumGrowth, z + maximumGrowth);
+      expanded.partOverlaps.push_back({expandedVoxel, membership.partId});
+    }
+  }
+
+  std::size_t added = 0;
+  std::vector<std::uint16_t> remaining(expandedCount, 0);
+  std::priority_queue<std::pair<int, std::size_t>> pending;
+  constexpr int directions[6][3] = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
+  for (int z = 0; z < n; ++z) {
+    for (int y = 0; y < n; ++y) {
+      for (int x = 0; x < n; ++x) {
+        const std::size_t sourceIndex = static_cast<std::size_t>(x) + static_cast<std::size_t>(y) * n + static_cast<std::size_t>(z) * plane;
+        if (!grid.data[sourceIndex]) continue;
+        bool ridge = true;
+        for (const auto& direction : directions) {
+          const int nx = x + direction[0], ny = y + direction[1], nz = z + direction[2];
+          if (nx < 0 || ny < 0 || nz < 0 || nx >= n || ny >= n || nz >= n) continue;
+          const std::size_t neighbor = static_cast<std::size_t>(nx) + static_cast<std::size_t>(ny) * n + static_cast<std::size_t>(nz) * plane;
+          if (grid.data[neighbor] && distance[neighbor] > distance[sourceIndex]) {
+            ridge = false;
+            break;
+          }
+        }
+        if (!ridge) continue;
+        const int currentWidth = std::max(1, static_cast<int>(distance[sourceIndex]) * 2 - 1);
+        if (currentWidth >= minimumVoxels) continue;
+        const int growth = std::min(maximumGrowth, (minimumVoxels - currentWidth + 1) / 2);
+        const int centerX = x + maximumGrowth, centerY = y + maximumGrowth, centerZ = z + maximumGrowth;
+        if (growth == 0) continue;
+        const std::size_t center = expandedIndex(centerX, centerY, centerZ);
+        const int steps = growth + 1;
+        if (steps > remaining[center]) {
+          remaining[center] = static_cast<std::uint16_t>(steps);
+          pending.emplace(steps, center);
+        }
+      }
+    }
+  }
+
+  while (!pending.empty()) {
+    const auto [steps, index] = pending.top();
+    pending.pop();
+    if (steps <= 1 || remaining[index] != steps) continue;
+    const int x = static_cast<int>(index % expandedResolution);
+    const int y = static_cast<int>((index / expandedResolution) % expandedResolution);
+    const int z = static_cast<int>(index / expandedPlane);
+    const int nextSteps = steps - 1;
+    for (int dz = -1; dz <= 1; ++dz) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          if (dx == 0 && dy == 0 && dz == 0) continue;
+          const int nx = x + dx, ny = y + dy, nz = z + dz;
+          if (nx < 0 || ny < 0 || nz < 0 || nx >= expandedResolution || ny >= expandedResolution || nz >= expandedResolution) continue;
+          const std::size_t target = expandedIndex(nx, ny, nz);
+          if (remaining[target] >= nextSteps) continue;
+          remaining[target] = static_cast<std::uint16_t>(nextSteps);
+          if (!expanded.data[target]) {
+            expanded.data[target] = 1;
+            if (hasColors) expanded.colors[target] = expanded.colors[index];
+            if (hasParts) expanded.partIds[target] = expanded.partIds[index];
+            ++added;
+          }
+          pending.emplace(nextSteps, target);
+        }
+      }
+    }
+  }
+
+  if (added) grid = std::move(expanded);
+  return added;
+}
+
+VoxelGrid Voxelizer::voxelize(const std::vector<Vec3>& positions, const std::vector<Tri>& triangles,
+                              int gridResolution, const std::vector<std::uint32_t>* triangleParts)
 {
   if (gridResolution <= 0 || gridResolution > 2048) throw std::runtime_error("resolution must be in 1..2048");
   if (positions.empty() || triangles.empty()) throw std::runtime_error("empty mesh");
+  if (triangleParts && triangleParts->size() != triangles.size()) throw std::runtime_error("triangle part map size mismatch");
 
   Vec3 minP = {std::numeric_limits<double>::max(), std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
   Vec3 maxP = {std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
@@ -330,6 +726,8 @@ VoxelGrid Voxelizer::voxelize(const std::vector<Vec3>& positions, const std::vec
   grid.origin = origin;
   grid.voxelSize = voxelSize;
   grid.data.assign(static_cast<std::size_t>(gridResolution) * gridResolution * gridResolution, 0);
+  if (triangleParts) grid.partIds.assign(grid.data.size(), 0);
+  std::unordered_map<std::size_t, std::vector<std::uint32_t>> overlappingParts;
 
   const Vec3 half = {voxelSize * 0.5, voxelSize * 0.5, voxelSize * 0.5};
   for (const Tri& tri : triangles) {
@@ -353,10 +751,31 @@ VoxelGrid Voxelizer::voxelize(const std::vector<Vec3>& positions, const std::vec
       for (int y = lo[1]; y <= hi[1]; ++y) {
         for (int x = lo[0]; x <= hi[0]; ++x) {
           const Vec3 center = {origin[0] + (x + 0.5) * voxelSize, origin[1] + (y + 0.5) * voxelSize, origin[2] + (z + 0.5) * voxelSize};
-          if (triangleBoxOverlap(center, half, a, b, c)) grid.set(x, y, z);
+          if (triangleBoxOverlap(center, half, a, b, c)) {
+            grid.set(x, y, z);
+            if (triangleParts) {
+              const std::size_t index = static_cast<std::size_t>(x) + static_cast<std::size_t>(y) * gridResolution
+                + static_cast<std::size_t>(z) * gridResolution * gridResolution;
+              const std::uint32_t partId = (*triangleParts)[&tri - triangles.data()];
+              if (grid.partIds[index] == 0) grid.partIds[index] = partId;
+              else if (grid.partIds[index] != partId) {
+                std::vector<std::uint32_t>& overlaps = overlappingParts[index];
+                if (std::find(overlaps.begin(), overlaps.end(), partId) == overlaps.end()) overlaps.push_back(partId);
+              }
+            }
+          }
         }
       }
     }
+  }
+  if (triangleParts) {
+    for (auto& [voxelIndex, partIds] : overlappingParts) {
+      std::sort(partIds.begin(), partIds.end());
+      for (const std::uint32_t partId : partIds) grid.partOverlaps.push_back({voxelIndex, partId});
+    }
+    std::sort(grid.partOverlaps.begin(), grid.partOverlaps.end(), [](const auto& left, const auto& right) {
+      return left.voxelIndex != right.voxelIndex ? left.voxelIndex < right.voxelIndex : left.partId < right.partId;
+    });
   }
   return grid;
 }
@@ -395,14 +814,24 @@ std::size_t VoxelGrid::connectedComponents() const
   return count;
 }
 
-VoxelGrid voxelizeMesh(const std::string& path, int resolution, VoxelizationMode mode, std::string* backend)
+VoxelGrid voxelizeMesh(const std::string& path, int resolution, VoxelizationMode mode,
+                       std::string* backend, bool splitParts)
 {
   std::vector<Vec3> positions;
   std::vector<Tri> triangles;
   std::vector<FloatColor> colors;
   bool hasColors = false;
   readMesh(path, positions, triangles, colors, hasColors);
+  const std::vector<std::uint32_t> triangleParts = splitParts ? findTriangleParts(positions, triangles) : std::vector<std::uint32_t>{};
+  const auto* partMap = splitParts ? &triangleParts : nullptr;
   if (mode == VoxelizationMode::Triangle) {
+    if (splitParts) {
+      if (backend) *backend = "cpu-split-parts";
+      VoxelGrid grid = Voxelizer().voxelize(positions, triangles, resolution, partMap);
+      grid.mode = mode;
+      if (hasColors) projectVertexColors(grid, positions, triangles, colors);
+      return grid;
+    }
 #if defined(VOXKIT_ENABLE_METAL)
     if (backend) *backend = "metal-gpu";
     VoxelGrid grid = voxelizeTrianglesMetal(positions, triangles, resolution);
@@ -427,7 +856,9 @@ VoxelGrid voxelizeMesh(const std::string& path, int resolution, VoxelizationMode
     // retaining unpaired triangles for STL and triangulated glTF inputs.
     std::vector<std::uint8_t> paired(triangles.size(), 0);
     std::vector<Tri> quadTriangles;
+    std::vector<std::uint32_t> quadParts;
     quadTriangles.reserve(triangles.size());
+    if (splitParts) quadParts.reserve(triangles.size());
     for (std::size_t i = 0; i < triangles.size(); ++i) {
       if (paired[i]) continue;
       std::size_t partner = triangles.size();
@@ -444,18 +875,21 @@ VoxelGrid voxelizeMesh(const std::string& path, int resolution, VoxelizationMode
         if (denom > 1e-18 && std::abs(dot(na, nb)) / denom > 0.9999) { partner = j; break; }
       }
       quadTriangles.push_back(a);
+      if (splitParts) quadParts.push_back(triangleParts[i]);
       paired[i] = 1;
       if (partner != triangles.size()) {
         quadTriangles.push_back(triangles[partner]);
+        if (splitParts) quadParts.push_back(triangleParts[partner]);
         paired[partner] = 1;
       }
     }
-    VoxelGrid grid = Voxelizer().voxelize(positions, quadTriangles, resolution);
+    VoxelGrid grid = Voxelizer().voxelize(positions, quadTriangles, resolution,
+                                         splitParts ? &quadParts : nullptr);
     grid.mode = mode;
     if (hasColors) projectVertexColors(grid, positions, quadTriangles, colors);
     return grid;
   }
-  VoxelGrid grid = Voxelizer().voxelize(positions, triangles, resolution);
+  VoxelGrid grid = Voxelizer().voxelize(positions, triangles, resolution, partMap);
   grid.mode = mode;
   if (hasColors) projectVertexColors(grid, positions, triangles, colors);
   return grid;
@@ -557,6 +991,7 @@ void writeBinvox(const VoxelGrid& grid, const std::string& path)
   out.close();
   if (!out) throw std::runtime_error("failed while writing binvox output: " + path);
   writeVoxelColorSidecar(grid, path);
+  writeVoxelPartSidecar(grid, path);
 }
 
 void writeVoxelColorSidecar(const VoxelGrid& grid, const std::string& binvoxPath)
@@ -626,6 +1061,118 @@ bool readVoxelColorSidecar(VoxelGrid& grid, const std::string& binvoxPath)
   return true;
 }
 
+void writeVoxelPartSidecar(const VoxelGrid& grid, const std::string& binvoxPath)
+{
+  const std::filesystem::path target = binvoxPath + ".parts";
+  if (!grid.hasParts()) {
+    std::error_code ignored;
+    std::filesystem::remove(target, ignored);
+    return;
+  }
+  const std::filesystem::path temporary = target.string() + ".tmp";
+  std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+  if (!out) throw std::runtime_error("failed to open voxel part sidecar: " + target.string());
+  constexpr char magic[8] = {'V','X','P','A','R','T','2','\0'};
+  const std::uint32_t resolution = static_cast<std::uint32_t>(grid.resolution);
+  const std::uint64_t voxelCount = static_cast<std::uint64_t>(grid.data.size());
+  const std::uint64_t occupiedCount = static_cast<std::uint64_t>(grid.occupied());
+  const std::size_t partCount = grid.partCount();
+  if (partCount > std::numeric_limits<std::uint32_t>::max()) throw std::runtime_error("too many source parts to save");
+  const std::uint32_t serializedPartCount = static_cast<std::uint32_t>(partCount);
+  const std::uint64_t overlapCount = static_cast<std::uint64_t>(grid.partOverlaps.size());
+  out.write(magic, sizeof(magic));
+  out.write(reinterpret_cast<const char*>(&resolution), sizeof(resolution));
+  out.write(reinterpret_cast<const char*>(&voxelCount), sizeof(voxelCount));
+  out.write(reinterpret_cast<const char*>(&occupiedCount), sizeof(occupiedCount));
+  out.write(reinterpret_cast<const char*>(&serializedPartCount), sizeof(serializedPartCount));
+  out.write(reinterpret_cast<const char*>(&overlapCount), sizeof(overlapCount));
+  for (std::size_t index = 0; index < grid.data.size(); ++index) {
+    if (!grid.data[index]) continue;
+    const std::uint32_t partId = grid.partIds[index];
+    if (partId == 0 || partId > serializedPartCount) throw std::runtime_error("invalid source part assignment in voxel grid");
+    out.write(reinterpret_cast<const char*>(&partId), sizeof(partId));
+  }
+  for (const PartVoxelMembership& membership : grid.partOverlaps) {
+    if (membership.voxelIndex >= grid.data.size() || !grid.data[membership.voxelIndex]
+        || membership.partId == 0 || membership.partId > serializedPartCount
+        || membership.partId == grid.partIds[membership.voxelIndex]) {
+      throw std::runtime_error("invalid overlapping source part assignment in voxel grid");
+    }
+    const std::uint64_t index = static_cast<std::uint64_t>(membership.voxelIndex);
+    out.write(reinterpret_cast<const char*>(&index), sizeof(index));
+    out.write(reinterpret_cast<const char*>(&membership.partId), sizeof(membership.partId));
+  }
+  out.close();
+  if (!out) {
+    std::error_code ignored;
+    std::filesystem::remove(temporary, ignored);
+    throw std::runtime_error("failed while writing voxel part sidecar: " + target.string());
+  }
+  std::error_code error;
+  std::filesystem::rename(temporary, target, error);
+  if (error) {
+    std::filesystem::remove(target, error);
+    error.clear();
+    std::filesystem::rename(temporary, target, error);
+  }
+  if (error) throw std::runtime_error("failed to install voxel part sidecar: " + error.message());
+}
+
+bool readVoxelPartSidecar(VoxelGrid& grid, const std::string& binvoxPath)
+{
+  std::ifstream input(binvoxPath + ".parts", std::ios::binary);
+  if (!input) return false;
+  char magic[8]{};
+  std::uint32_t resolution = 0, partCount = 0;
+  std::uint64_t voxelCount = 0, occupiedCount = 0;
+  input.read(magic, sizeof(magic));
+  input.read(reinterpret_cast<char*>(&resolution), sizeof(resolution));
+  input.read(reinterpret_cast<char*>(&voxelCount), sizeof(voxelCount));
+  input.read(reinterpret_cast<char*>(&occupiedCount), sizeof(occupiedCount));
+  input.read(reinterpret_cast<char*>(&partCount), sizeof(partCount));
+  const bool versionOne = std::memcmp(magic, "VXPART1\0", sizeof(magic)) == 0;
+  const bool versionTwo = std::memcmp(magic, "VXPART2\0", sizeof(magic)) == 0;
+  std::uint64_t overlapCount = 0;
+  if (versionTwo) input.read(reinterpret_cast<char*>(&overlapCount), sizeof(overlapCount));
+  if (!input || (!versionOne && !versionTwo)
+      || resolution != static_cast<std::uint32_t>(grid.resolution)
+      || voxelCount != grid.data.size() || occupiedCount != grid.occupied() || partCount == 0
+      || (versionOne && overlapCount != 0)) {
+    return false;
+  }
+  const std::uint64_t headerSize = versionTwo ? 40 : 32;
+  constexpr std::uint64_t baseRecordSize = sizeof(std::uint32_t);
+  constexpr std::uint64_t overlapRecordSize = sizeof(std::uint64_t) + sizeof(std::uint32_t);
+  const std::uint64_t maximum = std::numeric_limits<std::uint64_t>::max();
+  if (occupiedCount > (maximum - headerSize) / baseRecordSize) return false;
+  const std::uint64_t baseSize = headerSize + occupiedCount * baseRecordSize;
+  if (overlapCount > (maximum - baseSize) / overlapRecordSize) return false;
+  std::error_code sizeError;
+  const std::uintmax_t sidecarSize = std::filesystem::file_size(binvoxPath + ".parts", sizeError);
+  if (sizeError || sidecarSize != baseSize + overlapCount * overlapRecordSize) return false;
+  std::vector<std::uint32_t> partIds(grid.data.size(), 0);
+  for (std::size_t index = 0; index < grid.data.size(); ++index) {
+    if (!grid.data[index]) continue;
+    input.read(reinterpret_cast<char*>(&partIds[index]), sizeof(std::uint32_t));
+    if (!input || partIds[index] == 0 || partIds[index] > partCount) return false;
+  }
+  std::vector<PartVoxelMembership> partOverlaps;
+  partOverlaps.reserve(static_cast<std::size_t>(overlapCount));
+  for (std::uint64_t overlap = 0; overlap < overlapCount; ++overlap) {
+    std::uint64_t index = 0;
+    std::uint32_t partId = 0;
+    input.read(reinterpret_cast<char*>(&index), sizeof(index));
+    input.read(reinterpret_cast<char*>(&partId), sizeof(partId));
+    if (!input || index >= grid.data.size() || !grid.data[static_cast<std::size_t>(index)]
+        || partId == 0 || partId > partCount || partId == partIds[static_cast<std::size_t>(index)]) return false;
+    partOverlaps.push_back({static_cast<std::size_t>(index), partId});
+  }
+  if (input.peek() != std::char_traits<char>::eof()) return false;
+  grid.partIds = std::move(partIds);
+  grid.partOverlaps = std::move(partOverlaps);
+  return true;
+}
+
 VoxelGrid readBinvox(const std::string& path)
 {
   std::ifstream input(path, std::ios::binary);
@@ -681,6 +1228,7 @@ VoxelGrid readBinvox(const std::string& path)
     offset += count;
   }
   readVoxelColorSidecar(grid, path);
+  readVoxelPartSidecar(grid, path);
   return grid;
 }
 
@@ -869,6 +1417,64 @@ std::vector<StlTriangle> triangulateMesh(const SurfaceMesh& mesh)
   return triangles;
 }
 
+struct SurfacePart {
+  std::uint32_t id = 0;
+  std::vector<StlTriangle> triangles;
+};
+
+std::vector<std::uint32_t> voxelPartIds(const VoxelGrid& grid)
+{
+  if (!grid.hasParts()) return {0};
+  std::vector<std::uint32_t> ids;
+  for (std::size_t index = 0; index < grid.partIds.size(); ++index) {
+    if (grid.data[index] && grid.partIds[index]) ids.push_back(grid.partIds[index]);
+  }
+  for (const PartVoxelMembership& membership : grid.partOverlaps) ids.push_back(membership.partId);
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  return ids;
+}
+
+VoxelGrid extractVoxelPart(const VoxelGrid& grid, std::uint32_t id)
+{
+  if (!grid.hasParts()) return grid;
+  VoxelGrid component;
+  component.resolution = grid.resolution;
+  component.origin = grid.origin;
+  component.voxelSize = grid.voxelSize;
+  component.mode = grid.mode;
+  component.data.assign(grid.data.size(), 0);
+  if (grid.hasColors()) component.colors.assign(grid.data.size(), ColorRGBA8{});
+  std::unordered_map<std::size_t, std::vector<std::uint32_t>> overlapIds;
+  for (const PartVoxelMembership& membership : grid.partOverlaps) overlapIds[membership.voxelIndex].push_back(membership.partId);
+  for (std::size_t index = 0; index < grid.data.size(); ++index) {
+    if (!grid.data[index]) continue;
+    bool belongsToPart = grid.partIds[index] == id;
+    if (!belongsToPart) {
+      const auto overlap = overlapIds.find(index);
+      belongsToPart = overlap != overlapIds.end()
+        && std::find(overlap->second.begin(), overlap->second.end(), id) != overlap->second.end();
+    }
+    if (!belongsToPart) continue;
+    component.data[index] = 1;
+    if (grid.hasColors()) component.colors[index] = grid.colors[index];
+  }
+  return component;
+}
+
+std::vector<SurfacePart> surfaceParts(const VoxelGrid& grid, VoxelizationMode mode)
+{
+  const std::vector<std::uint32_t> ids = voxelPartIds(grid);
+  std::vector<SurfacePart> result;
+  result.reserve(ids.size());
+  for (const std::uint32_t id : ids) {
+    const VoxelGrid component = extractVoxelPart(grid, id);
+    std::vector<StlTriangle> triangles = triangulateMesh(makeSurfaceMesh(component, mode));
+    if (!triangles.empty()) result.push_back({id, std::move(triangles)});
+  }
+  return result;
+}
+
 } // namespace
 
 void writeStl(const VoxelGrid& grid, const std::string& path, VoxelizationMode mode)
@@ -878,14 +1484,43 @@ void writeStl(const VoxelGrid& grid, const std::string& path, VoxelizationMode m
   }
   if (!(grid.voxelSize > 0.0)) throw std::runtime_error("invalid voxel size");
 
+  const std::vector<SurfacePart> parts = surfaceParts(grid, mode);
+  std::vector<StlTriangle> triangles;
+  for (const SurfacePart& part : parts) triangles.insert(triangles.end(), part.triangles.begin(), part.triangles.end());
+  if (triangles.empty()) throw std::runtime_error("cannot export an empty STL mesh");
+
+  // STL has no binary object table.  When source-part labels are available,
+  // use the standard ASCII multi-solid form so slicers that understand solid
+  // names can keep each source part as an individual object while the output
+  // remains a single .stl file.  Unsplit exports retain the compact binary
+  // representation used previously.
+  if (grid.hasParts()) {
+    std::ofstream out(path);
+    if (!out) throw std::runtime_error("failed to open STL output: " + path);
+    out << std::setprecision(9);
+    for (const SurfacePart& part : parts) {
+      out << "solid VoxelPart_" << part.id << "\n";
+      for (const StlTriangle& triangle : part.triangles) {
+        const Vec3 normal = normalize(cross(sub(triangle.b, triangle.a), sub(triangle.c, triangle.a)));
+        out << "  facet normal " << normal[0] << ' ' << normal[1] << ' ' << normal[2] << "\n"
+            << "    outer loop\n";
+        for (const Vec3& point : {triangle.a, triangle.b, triangle.c}) {
+          out << "      vertex " << point[0] << ' ' << point[1] << ' ' << point[2] << "\n";
+        }
+        out << "    endloop\n  endfacet\n";
+      }
+      out << "endsolid VoxelPart_" << part.id << "\n";
+    }
+    if (!out) throw std::runtime_error("failed while writing STL output: " + path);
+    return;
+  }
+
   std::ofstream out(path, std::ios::binary);
   if (!out) throw std::runtime_error("failed to open STL output: " + path);
   std::array<char, 80> header{};
   const std::string label = "Hands3DLab VoxKit - Snapmaker U1 STL";
   std::copy(label.begin(), label.end(), header.begin());
   out.write(header.data(), static_cast<std::streamsize>(header.size()));
-
-  const std::vector<StlTriangle> triangles = triangulateMesh(makeSurfaceMesh(grid, mode));
 
   if (triangles.size() > std::numeric_limits<std::uint32_t>::max()) throw std::runtime_error("STL contains too many triangles");
   const std::uint32_t count = static_cast<std::uint32_t>(triangles.size());
@@ -908,28 +1543,78 @@ void writeObj(const VoxelGrid& grid, const std::string& path, VoxelizationMode m
 {
   std::ofstream out(path);
   if (!out) throw std::runtime_error("failed to open OBJ output: " + path);
-  const SurfaceMesh mesh = makeSurfaceMesh(grid, mode);
   out << "# Hands3DLab VoxKit " << voxelizationModeName(mode) << " voxel surface\n";
-  for (const auto& p : mesh.vertices) out << "v " << p[0] << ' ' << p[1] << ' ' << p[2] << "\n";
-  for (const auto& face : mesh.faces) {
-    out << "f";
-    for (auto index : face) out << ' ' << index + 1;
-    out << "\n";
+  std::size_t vertexOffset = 0;
+  for (const std::uint32_t id : voxelPartIds(grid)) {
+    const VoxelGrid component = extractVoxelPart(grid, id);
+    const SurfaceMesh mesh = makeSurfaceMesh(component, mode);
+    if (mesh.faces.empty()) continue;
+    out << "o VoxelPart_" << (id ? id : 1) << "\n";
+    for (const auto& p : mesh.vertices) out << "v " << p[0] << ' ' << p[1] << ' ' << p[2] << "\n";
+    for (const auto& face : mesh.faces) {
+      out << "f";
+      for (auto index : face) out << ' ' << (vertexOffset + index + 1);
+      out << "\n";
+    }
+    vertexOffset += mesh.vertices.size();
   }
   if (!out) throw std::runtime_error("failed while writing OBJ output");
 }
 
 void writeGlb(const VoxelGrid& grid, const std::string& path, VoxelizationMode mode)
 {
-  const auto triangles = triangulateMesh(makeSurfaceMesh(grid, mode));
+  const std::vector<SurfacePart> parts = surfaceParts(grid, mode);
+  if (parts.empty()) throw std::runtime_error("cannot export an empty GLB mesh");
   std::vector<float> positions;
-  positions.reserve(triangles.size() * 9);
-  for (const auto& t : triangles) for (const auto& p : {t.a, t.b, t.c}) for (double v : p) positions.push_back(static_cast<float>(v));
+  std::vector<std::size_t> partOffsets, partLengths, partVertexCounts;
+  partOffsets.reserve(parts.size());
+  partLengths.reserve(parts.size());
+  partVertexCounts.reserve(parts.size());
+  for (const SurfacePart& part : parts) {
+    partOffsets.push_back(positions.size() * sizeof(float));
+    const std::size_t offset = positions.size();
+    for (const auto& triangle : part.triangles) {
+      for (const auto& point : {triangle.a, triangle.b, triangle.c}) {
+        for (double value : point) positions.push_back(static_cast<float>(value));
+      }
+    }
+    partLengths.push_back((positions.size() - offset) * sizeof(float));
+    partVertexCounts.push_back((positions.size() - offset) / 3);
+  }
   std::vector<std::uint8_t> bin(positions.size() * sizeof(float));
   std::memcpy(bin.data(), positions.data(), bin.size());
   while (bin.size() % 4) bin.push_back(0);
-  const std::size_t jsonLength = 250 + std::to_string(positions.size() / 3).size() * 2;
-  std::string json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"mode\":4}]}],\"buffers\":[{\"byteLength\":" + std::to_string(bin.size()) + "}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":" + std::to_string(bin.size()) + "}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":" + std::to_string(positions.size() / 3) + ",\"type\":\"VEC3\"}]}";
+  std::ostringstream jsonStream;
+  jsonStream << "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[";
+  for (std::size_t index = 0; index < parts.size(); ++index) {
+    if (index) jsonStream << ',';
+    jsonStream << index;
+  }
+  jsonStream << "]}],\"nodes\":[";
+  for (std::size_t index = 0; index < parts.size(); ++index) {
+    if (index) jsonStream << ',';
+    jsonStream << "{\"mesh\":" << index << ",\"name\":\"VoxelPart_"
+               << (parts[index].id ? parts[index].id : 1) << "\"}";
+  }
+  jsonStream << "],\"meshes\":[";
+  for (std::size_t index = 0; index < parts.size(); ++index) {
+    if (index) jsonStream << ',';
+    jsonStream << "{\"primitives\":[{\"attributes\":{\"POSITION\":" << index << "},\"mode\":4}]}";
+  }
+  jsonStream << "],\"buffers\":[{\"byteLength\":" << bin.size() << "}],\"bufferViews\":[";
+  for (std::size_t index = 0; index < parts.size(); ++index) {
+    if (index) jsonStream << ',';
+    jsonStream << "{\"buffer\":0,\"byteOffset\":" << partOffsets[index]
+               << ",\"byteLength\":" << partLengths[index] << "}";
+  }
+  jsonStream << "],\"accessors\":[";
+  for (std::size_t index = 0; index < parts.size(); ++index) {
+    if (index) jsonStream << ',';
+    jsonStream << "{\"bufferView\":" << index << ",\"componentType\":5126,\"count\":"
+               << partVertexCounts[index] << ",\"type\":\"VEC3\"}";
+  }
+  jsonStream << "]}";
+  std::string json = jsonStream.str();
   while (json.size() % 4) json.push_back(' ');
   std::ofstream out(path, std::ios::binary);
   if (!out) throw std::runtime_error("failed to open GLB output: " + path);
@@ -1053,18 +1738,25 @@ void write3mf(const VoxelGrid& grid, const std::string& path,
   if (maxMaterials == 0 || maxMaterials > 256) {
     throw std::runtime_error("3MF material count must be in 1..256");
   }
-  const SurfaceMesh mesh = makeSurfaceMesh(grid, mode);
-  const std::vector<StlTriangle> triangles = triangulateMesh(mesh);
-  if (triangles.empty()) throw std::runtime_error("cannot export an empty 3MF mesh");
-
-  std::vector<ColorRGBA8> triangleColors;
+  struct ColoredPart {
+    std::uint32_t id;
+    VoxelGrid voxels;
+    std::vector<StlTriangle> triangles;
+    std::vector<ColorRGBA8> colors;
+  };
+  std::vector<ColoredPart> parts;
   std::unordered_map<std::uint32_t, std::size_t> frequencies;
-  triangleColors.reserve(triangles.size());
-  for (const auto& triangle : triangles) {
-    const ColorRGBA8 color = colorAt(grid, mul(add(add(triangle.a, triangle.b), triangle.c), 1.0 / 3.0));
-    triangleColors.push_back(color);
-    ++frequencies[packedColor(color)];
+  for (const SurfacePart& surface : surfaceParts(grid, mode)) {
+    ColoredPart part{surface.id, extractVoxelPart(grid, surface.id), surface.triangles, {}};
+    part.colors.reserve(part.triangles.size());
+    for (const auto& triangle : part.triangles) {
+      const ColorRGBA8 color = colorAt(part.voxels, mul(add(add(triangle.a, triangle.b), triangle.c), 1.0 / 3.0));
+      part.colors.push_back(color);
+      ++frequencies[packedColor(color)];
+    }
+    parts.push_back(std::move(part));
   }
+  if (parts.empty()) throw std::runtime_error("cannot export an empty 3MF mesh");
   std::vector<std::pair<std::uint32_t, std::size_t>> ranked(frequencies.begin(), frequencies.end());
   std::sort(ranked.begin(), ranked.end(), [](const auto& left, const auto& right) {
     return left.second != right.second ? left.second > right.second : left.first < right.first;
@@ -1104,18 +1796,30 @@ void write3mf(const VoxelGrid& grid, const std::string& path,
           << std::setw(2) << static_cast<int>(color.g) << std::setw(2) << static_cast<int>(color.b)
           << std::setw(2) << static_cast<int>(color.a) << std::dec << std::nouppercase << "\"/>\n";
   }
-  model << "  </basematerials>\n  <object id=\"1\" type=\"model\"><mesh><vertices>\n";
-  for (const auto& triangle : triangles) for (const auto& point : {triangle.a, triangle.b, triangle.c}) {
-    model << "   <vertex x=\"" << point[0] << "\" y=\"" << point[1] << "\" z=\"" << point[2] << "\"/>\n";
+  model << "  </basematerials>\n";
+  std::vector<std::uint32_t> objectIds;
+  objectIds.reserve(parts.size());
+  for (std::size_t partIndex = 0; partIndex < parts.size(); ++partIndex) {
+    const std::uint32_t objectId = static_cast<std::uint32_t>(10 + partIndex);
+    objectIds.push_back(objectId);
+    const ColoredPart& part = parts[partIndex];
+    model << "  <object id=\"" << objectId << "\" name=\"VoxelPart_"
+          << part.id << "\" type=\"model\"><mesh><vertices>\n";
+    for (const auto& triangle : part.triangles) for (const auto& point : {triangle.a, triangle.b, triangle.c}) {
+      model << "   <vertex x=\"" << point[0] << "\" y=\"" << point[1] << "\" z=\"" << point[2] << "\"/>\n";
+    }
+    model << "  </vertices><triangles>\n";
+    for (std::size_t index = 0; index < part.triangles.size(); ++index) {
+      const std::size_t vertex = index * 3;
+      model << "   <triangle v1=\"" << vertex << "\" v2=\"" << vertex + 1
+            << "\" v3=\"" << vertex + 2 << "\" pid=\"2\" p1=\""
+            << paletteIndex(part.colors[index]) << "\"/>\n";
+    }
+    model << "  </triangles></mesh></object>\n";
   }
-  model << "  </vertices><triangles>\n";
-  for (std::size_t index = 0; index < triangles.size(); ++index) {
-    const std::size_t vertex = index * 3;
-    model << "   <triangle v1=\"" << vertex << "\" v2=\"" << vertex + 1
-          << "\" v3=\"" << vertex + 2 << "\" pid=\"2\" p1=\""
-          << paletteIndex(triangleColors[index]) << "\"/>\n";
-  }
-  model << "  </triangles></mesh></object>\n </resources>\n <build><item objectid=\"1\"/></build>\n</model>\n";
+  model << " </resources>\n <build>";
+  for (const std::uint32_t objectId : objectIds) model << "<item objectid=\"" << objectId << "\"/>";
+  model << "</build>\n</model>\n";
 
   const std::string contentTypes =
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
